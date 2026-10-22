@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- IMPORTANT: deliberately no android.permission.INTERNET -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <application android:allowBackup="false" android:usesCleartextTraffic="false"
+        android:label="皮皮" android:icon="@drawable/app_icon_baby" android:roundIcon="@drawable/app_icon_baby"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <service android:name=".LibraryVoiceCacheService" android:exported="false" android:stopWithTask="false"
+                 android:foregroundServiceType="specialUse" android:process=":voice_cache">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                      android:value="local_offline_ai_audiobook_precomputation_while_screen_off" />
+        </service>
+        <receiver android:name=".VoiceCacheRecoveryReceiver" android:exported="false" />
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

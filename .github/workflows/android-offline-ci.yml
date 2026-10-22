@@ -1,0 +1,55 @@
+name: Pipi offline Android build and checks
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Install Android Platform 35
+        run: yes | sdkmanager 'platforms;android-35' 'build-tools;35.0.0' || true
+      - name: Prepare complete offline assets
+        run: python prepare_offline.py
+      - name: Verify all resources and checksums
+        run: |
+          python check_v5_release.py
+          python verify_assets.py
+      - name: Run all current JavaScript regression tests
+        run: |
+          for test in tests/*.js; do node "$test" || exit 1; done
+          python tests/test_v5109_background_cache.py
+          python tests/test_kokoro_assets_v56.py
+          python tests/test_voice_assets_v55.py
+      - name: Prepare official embedded TTS engine and model
+        run: python prepare_v56_voice.py
+      - name: Verify embedded engine checksum and model structure
+        run: python prepare_v56_voice.py --verify-only
+      - name: Test shared pronunciation bridge
+        run: node tests/test_offline_voice_v55.js
+      - name: Assemble Android debug test build
+        run: gradle --no-daemon :app:assembleDebug
+      - name: Upload TEST APK (not a store release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pipi-V5.12-Android-DEBUG-testing-only
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

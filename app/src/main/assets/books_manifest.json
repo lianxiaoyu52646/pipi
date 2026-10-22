@@ -1,0 +1,162 @@
+[
+  {
+    "id": "alice",
+    "book_id": 11,
+    "sha256": "5aef0208433aa07aa455b79ff4c2fb613b6b68de3de9f3e8047b88097cb6c227",
+    "characters": 175024,
+    "source": "https://www.gutenberg.org/ebooks/11",
+    "source_file_sha256_basis": "bundled-raw-txt"
+  },
+  {
+    "id": "pride",
+    "book_id": 1342,
+    "sha256": "3f6bb9d6f78e0293b56acd4714dd68cb7d6d1d293402031ce9d5a216bcaf9d75",
+    "characters": 763082,
+    "source": "https://www.gutenberg.org/ebooks/1342",
+    "source_file_sha256_basis": "bundled-raw-txt"
+  },
+  {
+    "id": "sherlock",
+    "book_id": 1661,
+    "sha256": "fc5e242074c608f64d173eda36ec82824c311ae5903eecde8695704b332fc5e9",
+    "characters": 621047,
+    "source": "https://www.gutenberg.org/ebooks/1661",
+    "source_file_sha256_basis": "bundled-raw-txt"
+  },
+  {
+    "id": "christmas",
+    "book_id": 46,
+    "sha256": "f4668e2ec37c44b3ff866222fb929e2412231f920a9291b7ff9d7c2d309fcae4",
+    "characters": 190609,
+    "source": "https://www.gutenberg.org/ebooks/46",
+    "source_file_sha256_basis": "bundled-raw-txt"
+  },
+  {
+    "id": "secret",
+    "book_id": 113,
+    "sha256": "fec2a472bb746838165f2a52dc319149bf1b7e78b8c1ab8d593c1b64c0880fb6",
+    "characters": 477466,
+    "source": "https://www.gutenberg.org/ebooks/113",
+    "source_file_sha256_basis": "bundled-raw-txt"
+  },
+  {
+    "id": "oz",
+    "book_id": 55,
+    "sha256": "c42935c3361cec145d838583f1c50809c0da5ebb7a5a1360448c83408733c012",
+    "characters": 242508,
+    "source": "https://www.gutenberg.org/ebooks/55",
+    "source_file_sha256_basis": "bundled-raw-txt"
+  },
+  {
+    "id": "littlewomen",
+    "book_id": 514,
+    "sha256": "2c2db75e966ba9a91f186b4328730c8cdbf316dcf6e847989e70194bd525be71",
+    "characters": 1089949,
+    "source": "https://www.gutenberg.org/ebooks/514",
+    "source_file_sha256_basis": "bundled-raw-txt"
+  },
+  {
+    "id": "anne",
+    "book_id": 45,
+    "sha256": "9b4507a0f5fe65047835f973bd3b8c7678264f2ff2c9e8f87ccc60a389dbcb6c",
+    "characters": 614183,
+    "source": "https://www.gutenberg.org/ebooks/45",
+    "source_file_sha256_basis": "bundled-raw-txt"
+  },
+  {
+    "id": "machine",
+    "book_id": 35,
+    "sha256": "0eb70818a4c7e2e04f91be807bad37ca5c1475cd51cec2a7b620c4db2b595ce4",
+    "characters": 202718,
+    "source": "https://www.gutenberg.org/ebooks/35",
+    "source_file_sha256_basis": "bundled-raw-txt"
+  },
+  {
+    "id": "treasure",
+    "book_id": 120,
+    "sha256": "5bc08275eacea8640b1aa185c645283bb8c564d7b23df6b03437d229b4fc6ebd",
+    "characters": 391669,
+    "source": "https://www.gutenberg.org/ebooks/120",
+    "source_file_sha256_basis": "user-supplied-raw-txt"
+  },
+  {
+    "id": "peterpan",
+    "book_id": 16,
+    "sha256": "6b08714281fe38266a756741e4c62915cda7536c2f78cca501f7fd53f3f445ae",
+    "characters": 281503,
+    "source": "https://www.gutenberg.org/ebooks/16",
+    "source_file_sha256_basis": "user-supplied-raw-txt"
+  },
+  {
+    "id": "blackbeauty",
+    "book_id": 271,
+    "sha256": "493a70f2cd5580db12ba0bfee8d8fe74daa578f927c3db81afe285b31391d5a5",
+    "characters": 329696,
+    "source": "https://www.gutenberg.org/ebooks/271",
+    "source_file_sha256_basis": "user-supplied-raw-txt"
+  },
+  {
+    "id": "heidi",
+    "book_id": 1448,
+    "sha256": "25beec852bf3aafb21a16936c3587800547b295fb8f5602d0b6b4cba1529122e",
+    "characters": 520052,
+    "source": "https://www.gutenberg.org/ebooks/1448",
+    "source_file_sha256_basis": "user-supplied-raw-txt"
+  },
+  {
+    "id": "willows",
+    "book_id": 289,
+    "sha256": "98f6b6cda20087857cefe9121b71d6166c1b92423bb7645fdba3c45ff0c141e8",
+    "characters": 350644,
+    "source": "https://www.gutenberg.org/ebooks/289",
+    "source_file_sha256_basis": "user-supplied-raw-txt"
+  },
+  {
+    "id": "huckfinn",
+    "book_id": 76,
+    "sha256": "d617a37aa7ae1e1a93dcde2634db2bccb86824e31e29a55230bdbf77d6872d59",
+    "characters": 602752,
+    "source": "https://www.gutenberg.org/ebooks/76",
+    "source_file_sha256_basis": "user-supplied-raw-txt"
+  },
+  {
+    "id": "aroundworld",
+    "book_id": 103,
+    "sha256": "6f608ea2da50caf73245ad2996e4ee3c02ef1aa2152f7fcfe209df9aa39e7512",
+    "characters": 396838,
+    "source": "https://www.gutenberg.org/ebooks/103",
+    "source_file_sha256_basis": "user-supplied-raw-txt"
+  },
+  {
+    "id": "callwild",
+    "book_id": 215,
+    "sha256": "30f569c5671bba7bbc4a92ab6d8ee01a0d3be00f994819c77da62c28041eb8a2",
+    "characters": 198369,
+    "source": "https://www.gutenberg.org/ebooks/215",
+    "source_file_sha256_basis": "user-supplied-raw-txt"
+  },
+  {
+    "id": "littleprincess",
+    "book_id": 146,
+    "sha256": "004c4e47ab69973d8e8b164e950b9d77fd605a4ee8a42ce6a87fe42ab4c9fe21",
+    "characters": 391887,
+    "source": "https://www.gutenberg.org/ebooks/146",
+    "source_file_sha256_basis": "user-supplied-raw-txt"
+  },
+  {
+    "id": "pinocchio",
+    "book_id": 500,
+    "sha256": "072a84b3da860036ebf81dbd305149ef0d908064c30d513c7f640599fabeb99b",
+    "characters": 239397,
+    "source": "https://www.gutenberg.org/ebooks/500",
+    "source_file_sha256_basis": "user-supplied-raw-txt"
+  },
+  {
+    "id": "tom",
+    "book_id": 74,
+    "sha256": "74d77384b123a6360db9ab58463cff8b38df8525fbdc6000c81ee388e1f3cf10",
+    "characters": 421360,
+    "source": "https://www.gutenberg.org/ebooks/74",
+    "source_file_sha256_basis": "user-supplied-raw-txt"
+  }
+]

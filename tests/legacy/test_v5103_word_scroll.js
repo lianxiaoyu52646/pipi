@@ -1,0 +1,41 @@
+'use strict';
+const fs=require('fs'),vm=require('vm'),path=require('path'),assert=require('assert');
+const root=path.join(__dirname,'../app/src/main/assets'),source=fs.readFileSync(path.join(root,'app.js'),'utf8');
+const helper=fs.readFileSync(path.join(root,'word-scroll-progress.js'),'utf8');
+const css=fs.readFileSync(path.join(root,'v5-styles.css'),'utf8');
+const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
+assert(html.includes('word-scroll-progress.js')&&html.indexOf('word-scroll-progress.js')<html.indexOf('src="./app.js"'));
+assert(css.includes('#viewport.pipi-word-scroll-active{overflow-anchor:none'));
+assert(css.includes('height:124px!important'));
+assert(source.includes('listRestoreInProgress')&&source.includes('listUserIntentAt'));
+assert(source.includes('visibilitychange')&&source.includes('flushWordListProgress'));
+assert(source.includes("if(activeBook()===key&&!document.getElementById('pipiVirtualList'))render()"),'loading cannot re-render the active scroll list');
+assert(source.includes('state.wordListProgress')&&source.includes('state.wordStudyModes[key]'));
+// Pure progress arithmetic: only crossed words count, never merely rendered/visible words.
+const ctx={window:{},console,Math};vm.createContext(ctx);vm.runInContext(helper,ctx);
+const f=ctx.window.PipiScrollStudy.next;
+for(const [old,top,h,len,input,expected] of [[0,0,124,1200,true,0],[0,123,124,1200,true,0],[0,124,124,1200,true,1],[1,247,124,1200,true,1],[1,248,124,1200,true,2],[2,800,124,1200,false,2],[100,200,124,1200,true,100],[10,10000,124,15,true,15],[5,-1000,124,1200,true,5]])
+ assert.equal(f(old,top,h,len,input),expected,JSON.stringify({old,top,expected}));
+// Execute the app's actual progress commit function in isolation with a browser-like state.
+const start=source.indexOf('const WORD_ROW_HEIGHT=124;'),end=source.indexOf('function hydrateVisiblePhonetics(){',start);
+assert(start>0&&end>start);
+let active='primary',writes=0,counter={textContent:''},range={textContent:''},task;
+const scope={console,Date,Math,window:{},setTimeout:(cb)=>{task=cb;return 2},clearTimeout:()=>{},document:{getElementById:id=>id==='pipiListKnown'?counter:id==='pipiListRange'?range:null},state:{wordListProgress:{},wordListDaily:{},activity:{}},ui:{listBook:null,listRows:[],listStart:-1},activeBook:()=>active,dateKey:()=> '2026-10-21',save:()=>{writes++;return true},esc:x=>x,icon:()=>'',SprintBooks:{get:()=>[],BOOKS:{primary:{short:'小学'}}},words:[],PipiScrollStudy:ctx.window.PipiScrollStudy};
+vm.createContext(scope);vm.runInContext(source.slice(start,end),scope);
+vm.runInContext('listRestoreInProgress=true;listUserIntentAt=Date.now();updateWordListProgress(600,1200);',scope);
+assert.equal(vm.runInContext('wordListProgress().next',scope),0,'programmatic restore cannot mark words');
+vm.runInContext('listRestoreInProgress=false;listUserIntentAt=0;updateWordListProgress(600,1200);',scope);
+assert.equal(vm.runInContext('wordListProgress().next',scope),0,'no gesture cannot mark words');
+vm.runInContext('listUserIntentAt=Date.now();updateWordListProgress(600,1200);',scope);
+assert.equal(vm.runInContext('wordListProgress().next',scope),4);
+assert.equal(writes,0,'debounce prevents per-frame storage writes');
+assert.equal(counter.textContent,'4');assert.equal(vm.runInContext('state.wordListDaily[Object.keys(state.wordListDaily)[0]]',scope),4,'daily learning stats reflect passing rows');
+vm.runInContext('updateWordListProgress(280,1200);',scope);
+assert.equal(vm.runInContext('wordListProgress().next',scope),4,'scrolling back preserves watermark');
+task();assert.equal(writes,1,'debounce commits to backup state');
+active='junior';assert.equal(vm.runInContext('wordListProgress().next',scope),0,'books independent');
+vm.runInContext('listUserIntentAt=Date.now();updateWordListProgress(248,1200);',scope);
+assert.equal(vm.runInContext('wordListProgress().next',scope),2);
+active='primary';assert.equal(vm.runInContext('wordListProgress().next',scope),4,'reopened book resumes');
+assert(source.includes("upsertMistake('vocab',id,0,'列表浏览：标记不会'"),'mistakes must require the explicit button');
+console.log('PASS V5.10.3: real user-only crossings, no idle/restore count, forward watermark, per-book resume, debounced writes, only tap marks unknown');

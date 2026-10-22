@@ -1,0 +1,4 @@
+皮皮 V5.12.6：20本完整英文公版原著，已随 Android APK 源码内置在 assets/books/。
+原九本、汤姆·索亚历险记、新增十本均有真实英文全文、章节目录和离线朗读索引。
+来源 Project Gutenberg，英文纯文本；版权状况依用户所在地而异。
+完整索引 assets/voice-library/index.json；82,926 个分段。重新编译 APK 仍需旧项目的 Piper/Kokoro 模型与 AAR。

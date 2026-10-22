@@ -1,0 +1,13 @@
+'use strict';
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const base=path.join(__dirname,'../app/src/main/assets');
+const html=fs.readFileSync(path.join(base,'originals-reader.html'),'utf8');
+const reader=fs.readFileSync(path.join(base,'originals-reader.js'),'utf8');
+assert(!fs.existsSync(path.join(base,'books-data.js')));
+assert(!html.includes('books-data.js'));
+assert(reader.includes("fetch('./books/'+book.id+'.txt'"));
+assert(!reader.includes('window.SprintEmbeddedBooks'));
+for(const name of ['alice','anne','pride','sherlock','secret','littlewomen','machine','oz','christmas'])assert(fs.statSync(path.join(base,'books',name+'.txt')).size>100000);
+const app=fs.readFileSync(path.join(base,'index.html'),'utf8');
+assert(/V5\.(?:10|11|12)/.test(app)&&!app.includes('V5.5'));
+console.log('PASS: TXT on demand, no double-embedded books; UI version aligned');

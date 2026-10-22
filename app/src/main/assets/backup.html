@@ -1,0 +1,76 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>皮皮 · 数据备份</title>
+<style>*{box-sizing:border-box}body{font-family:system-ui,-apple-system,'Noto Sans SC',sans-serif;background:#f7f7fc;color:#1f2742;margin:0;padding:20px}.wrap{max-width:520px;margin:20px auto;background:white;border-radius:22px;padding:25px;box-shadow:0 12px 40px #232b6015}h1{font-size:24px}.hint{font-size:13px;color:#606c84;line-height:1.75}.btn{border:0;border-radius:13px;background:#6857df;color:white;font-size:15px;padding:15px;display:block;width:100%;margin:14px 0;cursor:pointer}.second{background:#e8e6fb;color:#4537a6}.danger{color:#a72727}a{color:#6757df;text-decoration:none}.status{font-size:13px;color:#356d50;min-height:32px}</style><script src="./pipi-web-navigation.js"></script></head><body><div class="wrap"><a href="./index.html?nav=me" data-pipi-return="true">← 返回皮皮</a><h1>学习记录备份</h1><p class="hint">离线 App 内的数据独立保存在手机。卸载 App 或清除应用数据会删除学习记录。请定期导出到手机“文件”。新版会额外保留最多5个短期自动快照，但快照无法替代你手动导出的文件备份。备份包括本机学习进度、FSRS、原著书签，以及自行导入并缓存在本机的考试词书（若存在）。不包含 APK 自带的小说原文和完整 ECDICT 资源。</p>
+<button class="btn" id="backup">导出学习记录 JSON</button><button class="btn second" id="rawBackup">保存原始记录（异常数据应急）</button><button class="btn second" id="recoverAuto">尝试从自动快照恢复</button><button class="btn second" id="restore">从 JSON 恢复学习记录</button><input id="file" type="file" accept=".json,application/json" hidden><p class="hint danger">恢复前请先导出当前记录。恢复会覆盖备份里包含的数据项；若失败，将尝试自动回滚。原电脑浏览器和手机 App 的数据不会自动同步。</p><p id="status" class="status"></p></div>
+<script src="./wordbooks.js"></script><script src="./backup-core.js"></script>
+<script src="./state-safety.js"></script>
+<script>
+(function(){'use strict';
+const msg=x=>document.getElementById('status').textContent=x;
+const buttons=[document.getElementById('backup'),document.getElementById('restore'),document.getElementById('recoverAuto'),document.getElementById('rawBackup')];
+function busy(v){for(const b of buttons)b.disabled=v}
+const dbName='sprint7_book_cache_v1';
+function getDB(){return new Promise((resolve,reject)=>{if(!('indexedDB'in window))return resolve(null);const req=indexedDB.open(dbName,1);req.onupgradeneeded=()=>{if(!req.result.objectStoreNames.contains('books'))req.result.createObjectStore('books')};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error)})}
+async function readCustomBooks(){const db=await getDB();if(!db)return [];
+ return new Promise((resolve,reject)=>{const tx=db.transaction('books','readonly'),store=tx.objectStore('books'),req=store.openCursor(),out=[];
+ req.onsuccess=()=>{const c=req.result;if(!c)return;const row=c.value;if(row?.source==='local-import'&&typeof row.text==='string')out.push({key:String(c.key),text:row.text,downloaded:row.downloaded});c.continue()};
+ tx.oncomplete=()=>{db.close();resolve(out)};tx.onerror=()=>{db.close();reject(tx.error)}})}
+async function writeCustomBooks(rows){if(!rows.length)return;const db=await getDB();if(!db)throw Error('无法打开词书缓存数据库');
+ return new Promise((resolve,reject)=>{const tx=db.transaction('books','readwrite'),store=tx.objectStore('books');for(const row of rows)store.put({text:row.text,source:'local-import',downloaded:row.downloaded},row.key);
+ tx.oncomplete=()=>{db.close();resolve()};tx.onerror=()=>{db.close();reject(tx.error||Error('写入词书缓存失败'))}})}
+async function deleteCustomBooks(keys){if(!keys.length)return;const db=await getDB();if(!db)return;
+ return new Promise((resolve,reject)=>{const tx=db.transaction('books','readwrite'),store=tx.objectStore('books');for(const key of keys)store.delete(key);
+ tx.oncomplete=()=>{db.close();resolve()};tx.onerror=()=>{db.close();reject(tx.error)}})}
+function save(name,text){if(window.SprintAndroid&&window.SprintAndroid.saveFile){const b=new TextEncoder().encode(text);let cs='';for(let i=0;i<b.length;i+=32768)cs+=String.fromCharCode(...b.subarray(i,i+32768));window.SprintAndroid.saveFile(name,'application/json',btoa(cs));return}const blob=new Blob([text],{type:'application/json'}),a=document.createElement('a'),u=URL.createObjectURL(blob);a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}
+document.getElementById('backup').onclick=async()=>{busy(true);msg('正在收集离线学习记录…');try{
+ const data={format:'pipi-offline-backup-v2',date:new Date().toISOString(),storage:PipiBackup.capture(localStorage),bookCache:await readCustomBooks()};if(!data.storage[PipiBackup.MAIN])throw Error('暂无学习数据');
+ PipiBackup.parse(data);const content=JSON.stringify(data),size=new Blob([content]).size;
+ if(size>14_000_000)throw Error('备份超过安卓导出上限（14MB），请联系开发者协助分包，切勿卸载旧版');
+ save('皮皮-V5-学习备份-'+new Date().toISOString().slice(0,10)+'.json',content);
+ msg('已准备好备份（'+(size/1048576).toFixed(2)+' MB，含'+data.bookCache.length+'本个人导入词书）。请确认系统保存窗口中已保存成功。');
+ }catch(e){msg('导出失败：'+e.message)}finally{busy(false)}};
+// A damaged JSON primary record must remain exportable before any recovery.
+document.getElementById('rawBackup').onclick=()=>{try{
+ const raw=localStorage.getItem(PipiBackup.MAIN);
+ if(!raw){msg('未找到原始记录');return}
+ const otherStorage=PipiBackup.capture(localStorage);delete otherStorage[PipiBackup.MAIN];
+ const doc={format:'pipi-raw-emergency-v1',date:new Date().toISOString(),key:PipiBackup.MAIN,raw,otherStorage};
+ const content=JSON.stringify(doc);
+ if(new Blob([content]).size>14_000_000)throw Error('原始记录过大，超出单文件导出上限');
+ save('皮皮-应急原始记录-'+new Date().toISOString().slice(0,10)+'.json',content);
+ msg('已发起原始记录导出，请确认系统文件保存完成。此文件只用于应急保留，不可直接恢复为正常学习数据。');
+ }catch(e){msg('应急导出失败：'+e.message)};
+};
+document.getElementById('recoverAuto').onclick=async()=>{busy(true);msg('正在检查本机自动快照…');try{
+ const row=await PipiStateSafety.latest();if(!row){msg('没有有效自动快照；请使用以前导出的 JSON 文件恢复');return}
+ const recovery=PipiBackup.parse({format:'pipi-offline-backup-v2',storage:row.storage&&row.storage[PipiBackup.MAIN]===row.raw?row.storage:{[PipiBackup.MAIN]:row.raw},bookCache:[]});
+ if(!confirm('发现 '+new Date(row.at).toLocaleString()+' 的学习记录自动快照。恢复将覆盖快照中的学习状态、阅读书签和偏好（若有）；本机导入词书不在快照内。确定恢复？'))return;
+ PipiBackup.applyStorage(localStorage,recovery.storage);
+ if(window.SprintAndroid?.saveLearningStateToSQLite)window.SprintAndroid.saveLearningStateToSQLite(localStorage.getItem(PipiBackup.MAIN)||'');
+ msg('已从自动快照恢复。正在返回首页。');setTimeout(()=>location.href='./index.html',1000);
+ }catch(e){msg('恢复自动快照失败：'+e.message)}finally{busy(false)}};
+document.getElementById('restore').onclick=()=>document.getElementById('file').click();
+document.getElementById('file').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;if(f.size>14_000_000)return msg('备份文件超过 14MB，请勿使用此页面直接恢复');
+ busy(true);try{
+ const data=PipiBackup.parse(await f.text());
+ for(const row of data.bookCache)SprintBooks.parseText(row.text,row.key);
+ if(!confirm('备份包含'+data.keys+'类数据、'+data.bookCache.length+'本自行导入词书。确定覆盖本机对应记录？建议先导出当前记录。'))return;
+ const originalBooks=await readCustomBooks(),originalKeys=new Set(originalBooks.map(x=>x.key));
+ // First validate and persist IndexedDB in one transaction; then commit localStorage with rollback.
+ await writeCustomBooks(data.bookCache);
+ try{PipiBackup.applyStorage(localStorage,data.storage);
+ if(window.SprintAndroid?.saveLearningStateToSQLite)window.SprintAndroid.saveLearningStateToSQLite(localStorage.getItem(PipiBackup.MAIN)||'')}catch(e){
+   // Restore original custom entries and remove newly created entries.
+   await writeCustomBooks(originalBooks);
+   await deleteCustomBooks(data.bookCache.map(x=>x.key).filter(x=>!originalKeys.has(x)));
+   throw e;
+ }
+ msg('学习记录恢复完成，正在返回首页。');setTimeout(()=>location.href='./index.html',1100);
+ }catch(e){msg('恢复未完成：'+e.message)}finally{busy(false);e.target.value=''}};
+})();
+</script><script>
+document.addEventListener('click',function(e){
+ const a=e.target.closest('a[href]');if(!a)return;
+ if(a.hasAttribute('data-pipi-return')){e.preventDefault();window.PipiWebNavigation.back(a.getAttribute('href').replace(/^\.\//,''));return}
+ if(a.hasAttribute('data-pipi-from-reader')){window.PipiWebNavigation.recordDepart();}
+},true);
+</script></body></html>

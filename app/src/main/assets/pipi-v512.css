@@ -1,0 +1,8 @@
+/* V5.12 graceful recovery when the main record cannot be safely parsed. */
+.pipi-recovery-lock{max-width:530px;margin:34px auto;padding:30px 22px;border-radius:24px;background:#fff;border:1px solid #eceafc;box-shadow:0 12px 38px #342a7d15;color:#272746;line-height:1.8}
+.pipi-recovery-lock h1{font-size:23px;line-height:1.35;margin:10px 0 14px}
+.pipi-recovery-lock p{font-size:14px;color:#586079}
+.pipi-recovery-symbol{width:48px;height:48px;display:grid;place-items:center;border-radius:14px;background:#fff1ed;color:#a13d2d;font-size:28px;font-weight:800}
+.pipi-recovery-action{display:block;background:#6755dc;color:#fff!important;text-decoration:none;text-align:center;border-radius:14px;padding:13px 15px;font-weight:700;min-height:48px;margin:20px 0 12px}
+.pipi-recovery-warning{color:#a13d2d!important}
+@media(max-width:360px){.pipi-recovery-lock{margin:16px 0;padding:22px 16px}}
