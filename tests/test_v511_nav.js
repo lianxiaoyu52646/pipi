@@ -1,0 +1,28 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert'),path=require('path');
+const assets=path.resolve(__dirname,'../app/src/main/assets');
+const files=['index.html','app.js','pipi-web-navigation.js','originals-reader.html','originals-reader.js','voice-cache.html','backup.html','dictionary.html'];
+const a=Object.fromEntries(files.map(x=>[x,fs.readFileSync(path.join(assets,x),'utf8')]));
+assert(a['app.js'].includes('pipiNavHistory.push'));
+assert(a['app.js'].includes('pipiScrollByPage.set'));
+assert(a['app.js'].includes('function openWordBookSwitch'));
+assert(a['app.js'].includes('pipiUpdateCacheStatus'));
+assert(a['app.js'].includes("['me','gear','工具']"));
+assert(a['originals-reader.js'].includes('window.PipiWebNavigation?.back'));
+assert(a['originals-reader.html'].includes('data-pipi-from-reader'));
+assert(a['voice-cache.html'].includes('data-pipi-return'));
+assert(a['backup.html'].includes('data-pipi-return'));
+assert(a['dictionary.html'].includes('data-pipi-return'));
+// Test cross-document LIFO navigation independent of WebView history.
+const storage=new Map(),calls=[];
+const context={sessionStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},location:{pathname:'/assets/index.html',search:'',assign:x=>calls.push(x)}};
+context.window=context;vm.createContext(context);vm.runInContext(a['pipi-web-navigation.js'],context);
+context.PipiWebNavigation.recordDepart('index.html?nav=library');
+context.location.pathname='/assets/originals-reader.html';context.location.search='?book=alice';
+context.PipiWebNavigation.recordDepart();
+context.location.pathname='/assets/dictionary.html';context.location.search='';
+context.PipiWebNavigation.back('index.html?nav=me');
+assert.strictEqual(calls.pop(),'./originals-reader.html?book=alice');
+context.location.pathname='/assets/originals-reader.html';context.location.search='?book=alice';
+context.PipiWebNavigation.back('index.html?nav=library');
+assert.strictEqual(calls.pop(),'./index.html?nav=library');
+console.log('V5.11 static navigation and cross-page back stack passed');

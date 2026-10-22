@@ -1,0 +1,32 @@
+'use strict';
+const assert=require('assert'),fs=require('fs'),path=require('path'),vm=require('vm');
+const root=path.join(__dirname,'../app/src/main/assets');
+const context={window:{}};
+vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(root,'original-books.js'),'utf8'),context);
+const books=context.window.OriginalBooks;
+assert.equal(books.length,20,'must show exactly twenty books');
+assert.equal(new Set(books.map(b=>b.id)).size,20);
+assert.equal(books.find(b=>b.id==='tom').expectedSections,35);
+assert(books.every(b=>b.pg>0&&b.expectedSections>0));
+const readerHtml=fs.readFileSync(path.join(root,'originals-reader.html'),'utf8');
+const homeApp=fs.readFileSync(path.join(root,'app.js'),'utf8');
+assert(readerHtml.includes('英文原著由 APK 离线提供'));
+assert(readerHtml.includes('readingProgressFill')&&readerHtml.includes('focusReading'));
+assert(homeApp.includes('共20本公版英文原著')); // V5 reader shelf copy
+assert(!readerHtml.includes('点击下载'));
+assert(!homeApp.includes('汤姆·索亚历险记》目前只有'));
+assert(!fs.existsSync(path.join(root,'tom-reader.html')));
+assert(!fs.readFileSync(path.join(root,'index.html'),'utf8').includes('./literature.js'));
+assert(fs.readFileSync(path.join(root,'originals-reader.js'),'utf8').includes('window.SprintECDICT.lookup(w)'));
+// Exercise actual reader's chapter segmentation against TOC + 35 substantial narrative sections.
+const whole=fs.readFileSync(path.join(root,'originals-reader.js'),'utf8');
+const defs=whole.slice(whole.indexOf('function tokenize(txt)'),whole.indexOf('async function downloadBook(book)'));
+const roman=n=>{const sym=[[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']];let out='';for(const [v,s] of sym)while(n>=v){out+=s;n-=v}return out};
+const sample='*** START OF THE PROJECT GUTENBERG EBOOK THE ADVENTURES OF TOM SAWYER, COMPLETE ***\n\nTHE ADVENTURES OF TOM SAWYER\n\nCONTENTS\n'+Array.from({length:35},(_,i)=>`CHAPTER ${roman(i+1)}.\nContents teaser`).join('\n')+'\n\nPREFACE\n\n'+('Preface about adventurous children and their remarkable experiences. '.repeat(12))+'\n\n'+Array.from({length:35},(_,i)=>`CHAPTER ${roman(i+1)}.\n\n`+(`Chapter ${i+1} contains a story about Tom Sawyer learning in a small village with adventures and friendships. `.repeat(220))).join('\n\n')+'\n*** END OF THE PROJECT GUTENBERG EBOOK THE ADVENTURES OF TOM SAWYER, COMPLETE ***';
+const parserCtx={console,now:()=>new Date().toISOString(),window:{PipiReaderParagraphs:require('../app/src/main/assets/reader-paragraphs.js')}};vm.createContext(parserCtx);vm.runInContext(defs+'\nthis.testParse=parseOriginal;',parserCtx);
+const parsed=parserCtx.testParse(sample,books.find(b=>b.id==='tom'));
+assert.equal(parsed.sections.filter(x=>!x.frontmatter).length,35);
+assert(parsed.wordCount>35000);
+assert.equal(parsed.sections.filter(x=>!x.frontmatter)[0].title,'CHAPTER I.');
+assert.equal(parsed.sections.filter(x=>!x.frontmatter)[34].title,'CHAPTER XXXV.');
+console.log('PASS: 20-book shelf, unmodified offline word lookup, reader parser 35 chapters, no bilingual/online shelf.');

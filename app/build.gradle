@@ -1,0 +1,140 @@
+plugins { id 'com.android.application'; id 'org.jetbrains.kotlin.android' }
+android {
+    namespace 'com.sprint7.offline'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'com.sprint7.offline'
+        minSdk 26
+        targetSdk 34
+        versionCode 36
+        versionName '5.12.7'
+        // Official AAR contains multiple ABIs. Limit deliverable to real ARM devices.
+        ndk { abiFilters 'arm64-v8a', 'armeabi-v7a' }
+    }
+    buildTypes { release { minifyEnabled false } }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    kotlinOptions { jvmTarget = '17' }
+    androidResources { noCompress += ['onnx'] }
+}
+// V5.10.6 source-package handoff: Gradle can reuse the user's EXISTING
+// offline models/AAR without modifying or deleting anything in the old project.
+// This import runs at project configuration time so the local AAR is present
+// before Android Gradle resolves local file dependencies.
+// The new archive intentionally does not redistribute huge binary voice models.
+def sourceProject = providers.gradleProperty('pipiVoiceSource').orElse(
+    providers.environmentVariable('PIPI_VOICE_SOURCE').orElse(
+        new File(System.getProperty('user.home'), 'Downloads/9 (2)').absolutePath
+    )
+).get()
+def sourceRoot = new File(sourceProject)
+// Compatibility with user's second Android Studio project in Downloads/3.
+// Do not copy from a guessed path unless its real AAR is present.
+def fallbackRoot = new File(System.getProperty('user.home'), 'Downloads/3')
+if (!new File(sourceRoot, 'app/libs/sherpa-onnx-1.13.8.aar').isFile() &&
+    new File(fallbackRoot, 'app/libs/sherpa-onnx-1.13.8.aar').isFile()) {
+    sourceRoot = fallbackRoot
+}
+def expectedAar = file('libs/sherpa-onnx-1.13.8.aar')
+def aarSource = new File(sourceRoot, 'app/libs/sherpa-onnx-1.13.8.aar')
+if ((!expectedAar.isFile() || expectedAar.length() < 10000000) && aarSource.isFile() && expectedAar.canonicalPath != aarSource.canonicalPath) {
+    expectedAar.parentFile.mkdirs()
+    expectedAar.withOutputStream { output -> aarSource.withInputStream { input -> output << input } }
+    logger.lifecycle('皮皮：已从原工程导入本地 sherpa-onnx AAR，不修改原工程')
+}
+['vits-piper-en_US-lessac-low', 'kokoro-int8-en-v0_19'].each { name ->
+    def src = new File(sourceRoot, 'app/src/main/assets/tts/' + name)
+    def dst = file('src/main/assets/tts/' + name)
+    def mainModel = name.startsWith('vits-') ? 'en_US-lessac-low.onnx' : 'model.int8.onnx'
+    if (!new File(dst, mainModel).isFile() && new File(src, mainModel).isFile() && src.canonicalPath != dst.canonicalPath) {
+        project.copy { from src; into dst }
+        logger.lifecycle('皮皮：已从原工程导入离线语音模型 ' + name)
+    }
+}
+
+dependencies {
+    implementation 'androidx.webkit:webkit:1.12.1'
+    implementation files('libs/sherpa-onnx-1.13.8.aar')
+}
+// Refuse to create a misleading APK without BOTH offline engines and bundled models.
+tasks.register('verifyOfflineVoiceAssets') {
+    doLast {
+        def base = file('src/main/assets/tts/vits-piper-en_US-lessac-low')
+        def aar = file('libs/sherpa-onnx-1.13.8.aar')
+        def model = new File(base, 'en_US-lessac-low.onnx')
+        def tok = new File(base, 'tokens.txt')
+        def data = new File(base, 'espeak-ng-data')
+        def kokoro = file('src/main/assets/tts/kokoro-int8-en-v0_19')
+        def kokoroModel = new File(kokoro, 'model.int8.onnx')
+        def kokoroVoices = new File(kokoro, 'voices.bin')
+        def kokoroTokens = new File(kokoro, 'tokens.txt')
+        def kokoroEspeak = new File(kokoro, 'espeak-ng-data')
+        def kokoroLicense = new File(kokoro, 'LICENSE')
+        if (!aar.isFile() || aar.length() < 10000000 || !model.isFile() || model.length() < 10000000 || !tok.isFile() || !data.isDirectory() || !(data.listFiles()?.length > 3)) {
+            throw new GradleException('缺少 Piper / sherpa-onnx。请确认原工程 C:/Users/74787/Downloads/9 (2) 中的 app/libs 和 assets/tts 完整，或执行 -PpipiVoiceSource=原工程目录。')
+        }
+        if (!kokoroModel.isFile() || kokoroModel.length() < 40000000 ||
+            !kokoroVoices.isFile() || kokoroVoices.length() < 1000000 ||
+            !kokoroTokens.isFile() || kokoroTokens.length() < 500 ||
+            !kokoroEspeak.isDirectory() || !(kokoroEspeak.listFiles()?.length > 5) || !kokoroLicense.isFile()) {
+            throw new GradleException('缺少 Kokoro INT8 模型，无法生成可朗读文章的 APK。请从原工程导入完整 assets/tts 资源。')
+        }
+    }
+}
+tasks.matching { it.name == 'preBuild' }.configureEach { dependsOn 'verifyOfflineVoiceAssets' }
+
+
+// V5.7 RELEASE GATE: debug builds remain available to diagnose incomplete
+// developer assets; release builds may never misrepresent nine novels as ten.
+// No network or Python dependency; checks the actual packaged Android assets.
+tasks.register('verifyReleaseContent') {
+    doLast {
+        def assetDir = file('src/main/assets')
+        def novels = new File(assetDir, 'books')
+        def expected = ['alice','anne','christmas','littlewomen','machine','oz','pride','secret','sherlock','tom','treasure','peterpan','blackbeauty','heidi','willows','huckfinn','aroundworld','callwild','littleprincess','pinocchio']
+        def manifestFile = new File(assetDir, 'books_manifest.json')
+        if (!manifestFile.isFile()) throw new GradleException('发布阻断：缺少 books_manifest.json')
+        def manifest = new groovy.json.JsonSlurper().parse(manifestFile)
+        if (manifest.size() != 20 || manifest.collect { it.id }.toSet() != expected.toSet())
+            throw new GradleException('发布阻断：必须包含20本小说的真实全文与来源清单')
+        expected.each { id ->
+            def textFile = new File(novels, id + '.txt')
+            def row = manifest.find { it.id == id }
+            if (!textFile.isFile() || textFile.length() < 100000L)
+                throw new GradleException('发布阻断：缺少完整原著 ' + id + '.txt')
+            def digest = java.security.MessageDigest.getInstance('SHA-256')
+            textFile.withInputStream { input ->
+                byte[] buf = new byte[32768]; int n
+                while ((n = input.read(buf)) != -1) digest.update(buf, 0, n)
+            }
+            def actual = digest.digest().encodeHex().toString()
+            if (actual != row.sha256) throw new GradleException('发布阻断：原著校验失败 ' + id)
+        }
+        ['primary','junior','senior'].each { id ->
+            if (!new File(assetDir, 'schoolbooks/'+id+'.json').isFile())
+                throw new GradleException('发布阻断：缺少学段词书 '+id)
+        }
+        ['cet4','cet6','ielts','toefl'].each { id ->
+            def f = new File(assetDir, 'wordbooks-data/'+id+'.txt')
+            if (!f.isFile() || f.length() < 8000L) throw new GradleException('发布阻断：缺少考试词书 '+id)
+        }
+        def shards = new File(assetDir, 'ecdict').listFiles()?.findAll { it.name ==~ /[0-9a-f]{2}\.json/ } ?: []
+        if (shards.size() != 256 || !new File(assetDir, 'ecdict/manifest.json').isFile()
+          || !new File(assetDir, 'ECDICT_LICENSE.txt').isFile())
+            throw new GradleException('发布阻断：ECDICT 不完整或版权声明缺失')
+        def status = new File(assetDir, 'asset-status.js').text
+        if (!status.contains('"releaseReady":true'))
+            throw new GradleException('发布阻断：asset-status.js 尚未标记资源核验通过')
+        logger.lifecycle('皮皮 V5.7 发布素材完整：20部原著、7套词书、256词典分片')
+    }
+}
+tasks.matching { it.name == 'preReleaseBuild' }.configureEach { dependsOn 'verifyReleaseContent' }
+
+// Single authoritative version: generated before any Android assets are packaged.
+// Avoid a Gradle V5.12 APK showing an older V5.11 label in WebView UI.
+tasks.register('generateVersionAsset') {
+    doLast {
+        def name = android.defaultConfig.versionName
+        file('src/main/assets/app-version.js').text = "window.PipiBuildVersion = '${name}';\n"
+    }
+}
+tasks.matching { it.name == 'preBuild' }.configureEach { dependsOn 'generateVersionAsset' }

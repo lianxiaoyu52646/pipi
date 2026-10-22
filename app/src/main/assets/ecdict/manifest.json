@@ -1,0 +1,13 @@
+{
+  "format": "sprint7-ecdict-v1",
+  "shards": 256,
+  "source": "skywind3000/ECDICT",
+  "license": "MIT",
+  "source_file": "ecdict.csv",
+  "source_rows": 770611,
+  "valid_rows": 770611,
+  "entries": 770611,
+  "with_chinese": 767533,
+  "generated_at": "2026-10-16T08:41:29.151557+00:00",
+  "sha256": "1a6947e04785db63613a92e14903cdae7954f7e84860b10e68e5c7cbb3f9c3cf"
+}

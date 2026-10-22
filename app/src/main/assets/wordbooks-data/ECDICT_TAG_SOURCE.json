@@ -1,0 +1,36 @@
+{
+  "source": "ECDICT bundled 256-shard dictionary, field g (exam community tags)",
+  "source_license": "ECDICT_LICENSE.txt (bundled with the dictionary)",
+  "disclaimer": "Community study classifications; not official exam vocabulary lists.",
+  "source_entries": 770611,
+  "generated_files": {
+    "cet4": {
+      "source_kind": "ecdict-tagged",
+      "tagged_entries": 3846,
+      "entries_in_file": 3846,
+      "sha256": "6e9454f20703100393abd3c263aa37c58d143123f85d29505ee456632f67201f",
+      "bytes": 278123
+    },
+    "cet6": {
+      "source_kind": "ecdict-tagged",
+      "tagged_entries": 5406,
+      "entries_in_file": 5406,
+      "sha256": "8995f3c6aad3345901a2157a82e976c0dff55955aa060f4225112bdc950c8e41",
+      "bytes": 376810
+    },
+    "ielts": {
+      "source_kind": "ecdict-tagged",
+      "tagged_entries": 5038,
+      "entries_in_file": 5038,
+      "sha256": "371de80a835ac329158ee2c3f6f3b129d199190e03eb3b694d7c2407dd9f742f",
+      "bytes": 357317
+    },
+    "toefl": {
+      "source_kind": "ecdict-tagged",
+      "tagged_entries": 6970,
+      "entries_in_file": 6970,
+      "sha256": "0a98018681b6db0aa1e51fd92462efb32ec02f156bec1bbab98183048a871fad",
+      "bytes": 452148
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "皮皮 · 离线英语学习",
+  "short_name": "皮皮",
+  "description": "七类离线词书、二十本公版英文原著、点词英汉词典与FSRS复习",
+  "lang": "zh-CN",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f8fc",
+  "theme_color": "#6259e9",
+  "icons": [
+    {
+      "src": "./app-avatar.png",
+      "sizes": "256x256",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

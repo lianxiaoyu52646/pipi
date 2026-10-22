@@ -1,0 +1,97 @@
+'use strict';
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const path=require('node:path');
+const vm=require('node:vm');
+const root=path.join(__dirname,'../app/src/main/assets');
+const PipiV5=require(path.join(root,'v5-core.js'));
+const SprintBookPath=(()=>{const context={window:{}};vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(root,'study-path.js'),'utf8'),context);return context.window.SprintBookPath})();
+const rows=Array.from({length:1200},(_,i)=>({id:`lex:word${String(i+1).padStart(4,'0')}`,word:`word${String(i+1).padStart(4,'0')}`,zh:'词'}));
+const state={vocab:{},mistakes:{},mistakeEvents:[],dayReviews:{},activity:{},dayTasks:{},bookPaths:{},bookPathDaily:{},wordBook:'primary',wordGoal:100};
+assert.equal(PipiV5.bookGoal(state,'primary'),100,'must preserve existing target of 100');
+assert.equal(PipiV5.bookGoal(state,'junior'),50,'new books default 50');
+PipiV5.setBookGoal(state,'junior',20);
+assert.equal(PipiV5.bookGoal(state,'junior'),20,'independent daily book goal');
+const oldRound={bookPaths:{'["primary","random","all"]':{position:1000,round:1,updated:'2026-10-16'}}};
+assert.equal(PipiV5.findPath(oldRound,'primary').path.position,1000,'never reset old random path');
+assert.equal(PipiV5.findPath(oldRound,'primary').order,'random');
+assert.equal(PipiV5.findPath(oldRound,'junior').path.position,0,'new book starts at zero');
+const today=new Date().toLocaleDateString('en-CA');
+for(let n=0;n<1000;n++){
+ const ctx=SprintBookPath.ensure(state,'primary','alpha','all',rows);
+ assert.equal(ctx.rows[ctx.path.position].id,rows[n].id,`word ${n+1}`);
+ if(n===999){const shot=PipiV5.beforeGrade(state,ctx.rows[n].id,ctx);const ok=SprintBookPath.advance(state,ctx,rows[n].id,today);assert(ok);assert.equal(PipiV5.restoreGrade(state,shot),true,'undo 1000th');assert.equal(state.bookPaths[ctx.key].position,999,'restored 1000th position');}
+ const fresh=SprintBookPath.ensure(state,'primary','alpha','all',rows);
+ assert(SprintBookPath.advance(state,fresh,rows[n].id,today));
+}
+const after=JSON.parse(JSON.stringify(state));
+assert.equal(SprintBookPath.ensure(after,'primary','alpha','all',rows).rows[after.bookPaths[SprintBookPath.pathKey('primary','alpha','all')].position].id,rows[1000].id,'1001st word after re-open');
+assert.equal(SprintBookPath.dailyCount(after,SprintBookPath.pathKey('primary','alpha','all'),today),1000);
+assert.equal(PipiV5.lastReader({alice:{chapter:2,last:'2026-10-01T00:00:00Z'},pride:{chapter:9,last:'2026-10-10T00:00:00Z'}},[{id:'alice',zhTitle:'爱丽丝'},{id:'pride',zhTitle:'傲慢与偏见'}]).id,'pride');
+const reviewState={vocab:{'lex:a':{dueAt:'2024-10-01T00:00:00Z'},'lex:b':{dueAt:'2050-01-01T00:00:00Z'},'lex:c':{dueAt:'2024-10-02T00:00:00Z'}},mistakes:{'word:lex:c:0':{unit:'lex:c',kind:'vocab',status:'mastered'}}};
+assert.deepEqual(PipiV5.dueIds(reviewState,Date.parse('2026-10-19T00:00:00Z')),['lex:a','lex:c'],'mastered labels remain scheduled by FSRS');
+assert.equal(PipiV5.addEvent(after,{id:'same',type:'word_answered'}),true);
+assert.equal(PipiV5.addEvent(after,{id:'same',type:'word_answered'}),false,'no duplicate events');
+assert(PipiV5.ensure(after).events.find(e=>e.id==='same').localDate,'event keeps local-day statistics');
+assert.deepEqual(PipiV5.dueIds({vocab:{'lex:missingDue':{reps:1}}},Date.now()),['lex:missingDue'],'legacy card without due is immediately reviewable');
+const assetStatus=fs.readFileSync(path.join(root,'asset-status.js'),'utf8');
+assert(assetStatus.includes('installedBooks')&&assetStatus.includes('releaseReady'),'packaged resource inventory exists');
+// App smoke: JS boots from its complete offline dependency chain without a DOM browser.
+(async()=>{
+ const st=new Map();const n={innerHTML:'',textContent:'',scrollTop:0,clientHeight:800,style:{},addEventListener(){},remove(){},classList:{remove(){},add(){},toggle(){}}};
+ const dom=new Proxy({}, {get(o,k){if(k==='createElement')return ()=>({...n,addEventListener(){},setAttribute(){},click(){}});if(k==='addEventListener')return ()=>{};if(k==='body')return {appendChild(){}};if(k==='getElementById')return ()=>({...n});if(k==='querySelector')return ()=>({...n,querySelector:()=>({...n})});return undefined}});
+ const ctx={requestAnimationFrame:(cb)=>{cb();return 1},console,Date,Set,Map,Math,Promise,URL,URLSearchParams,Blob,JSON,AbortController,clearTimeout,setTimeout:(fn,ms,...args)=>{const t=setTimeout(fn,ms,...args);t.unref?.();return t},clearInterval,setInterval:(fn,ms,...args)=>{const t=setInterval(fn,ms,...args);t.unref?.();return t},document:dom,navigator:{},location:{protocol:'https:'},localStorage:{getItem:k=>st.get(k)||null,setItem:(k,v)=>st.set(k,v),length:0},fetch:async url=>{const file=path.join(root,String(url).replace(/^\.\//,''));if(!fs.existsSync(file))return {ok:false,status:404,text:async()=>'',json:async()=>({})};return {ok:true,status:200,text:async()=>fs.readFileSync(file,'utf8'),json:async()=>JSON.parse(fs.readFileSync(file,'utf8'))}}};
+ ctx.window=ctx;
+ vm.createContext(ctx);
+ for(const name of ['bank.js','wordbooks.js','original-books.js','fsrs.js','schoolbooks.js','study-path.js','v5-core.js','asset-status.js','word-scroll-progress.js','app.js']) vm.runInContext(fs.readFileSync(path.join(root,name),'utf8'),ctx,{filename:name});
+ const summary=vm.runInContext('({today:renderToday(),books:renderBookPicker(),library:renderLiterature(),me:renderMe(),review:renderReview()})',ctx);
+ for(const k of ['today','books','library','me','review']) assert(summary[k].length>200,`${k} visible`);
+ assert(summary.today.includes('继续背单词'));
+ assert(summary.today.includes('从第 1 词继续'));
+ assert(summary.books.includes('小学')&&summary.books.includes('托福'));
+ assert(summary.library.includes('汤姆·索亚历险记'));
+ const status=JSON.parse(assetStatus.match(/Object\.freeze\((.*)\);/)[1]);
+ if(!status.releaseReady)assert(summary.library.includes('离线素材待补齐'),'missing book must be marked unavailable');
+ assert(summary.today.includes(status.installedBooks.length+' 本'),'home must display actual installed books');
+ assert(summary.me.includes('离线数据管理'));
+ assert(summary.review.includes('今日到期'));
+ // V5.10.3 default is the compact list; sliding past is the ONLY automatic "known" action.
+ await vm.runInContext("loadSelectedBook('primary')",ctx);
+ const w=vm.runInContext('renderWords()',ctx);
+ assert(w.includes('pipiVirtualList')&&w.includes('向下滑过＝会了'));
+ assert(!w.includes('wordOrderFilter')&&!w.includes('wordGoalFilter')&&!w.includes('pipi-mode-switch'));
+ const listCount=vm.runInContext('wordListData().length',ctx);assert(listCount>100);
+ const rowHTML=vm.runInContext('virtualWordRow(wordListData()[0],0)',ctx);
+ assert(rowHTML.includes('data-action="list-unknown"')&&rowHTML.includes('pipi-list-phonetic')&&rowHTML.includes('data-action="list-details"'));
+ const paths=vm.runInContext('JSON.stringify(state.bookPaths)',ctx);
+ vm.runInContext('listMarkUnknown(wordListData()[0].id,null)',ctx);
+ assert.equal(vm.runInContext('JSON.stringify(state.bookPaths)',ctx),paths,'tapping unknown must not move old FSRS cursor');
+ assert(vm.runInContext('state.mistakes[errorKey("vocab",wordListData()[0].id,0)].status',ctx)==='pending');
+ const history=vm.runInContext('state.mistakeEvents.length',ctx);
+ vm.runInContext('listMarkUnknown(wordListData()[0].id,null)',ctx);
+ assert.equal(vm.runInContext('state.mistakeEvents.length',ctx),history-1,'second tap undoes only this unknown mark');
+ assert.equal(vm.runInContext('state.mistakes[errorKey("vocab",wordListData()[0].id,0)]',ctx),undefined,'undo restores previous state');
+ const pure=vm.runInContext('PipiScrollStudy.next(2,4*124,124,100,true)',ctx);
+ assert.equal(pure,4,'four entire rows crossed');
+ assert.equal(vm.runInContext('PipiScrollStudy.next(2,8*124,124,100,false)',ctx),2,'automatic scroll is NOT learning');
+ assert.equal(vm.runInContext('PipiScrollStudy.next(8,3*124,124,100,true)',ctx),8,'scroll upward never undoes progress');
+ assert.equal(vm.runInContext('wordDisplayMode()',ctx),'both','every row has English + phonetic + Chinese');
+ // V5.12.2: swiping means known-for-now, NOT FSRS. Explicit 「不会」 is the only
+ // way to add a new list word to the mistakes notebook and review schedule.
+ const firstThree=vm.runInContext('wordListData().slice(0,3).map(x=>x.id)',ctx);
+ vm.runInContext('listMarkUnknown(wordListData()[1].id,null)',ctx);
+ const reviewsBefore=vm.runInContext('JSON.stringify(state.dayReviews)',ctx);
+ const eventsBefore=vm.runInContext('state.v5.events.length',ctx);
+ vm.runInContext('listUserIntentAt=Date.now();listRestoreInProgress=false;updateWordListProgress(3,wordListData().length);flushWordListProgress()',ctx);
+ const memory=vm.runInContext('state.vocab',ctx);
+ assert.equal(memory[firstThree[0]],undefined,'swiped word 1 must NEVER enter FSRS');
+ assert.equal(memory[firstThree[2]],undefined,'swiped word 3 must NEVER enter FSRS');
+ assert(memory[firstThree[1]]?.known===false,'explicit unknown must enter FSRS as unknown');
+ assert.equal(vm.runInContext('state.mistakes[errorKey("vocab",wordListData()[1].id,0)].status',ctx),'pending');
+ assert.equal(vm.runInContext('JSON.stringify(state.dayReviews)',ctx),reviewsBefore,'swiping cannot count as reviews');
+ assert.equal(vm.runInContext('state.v5.events.length',ctx),eventsBefore,'swiping should not create FSRS review events');
+ assert.equal(vm.runInContext('wordListProgress().next',ctx),3,'list cursor resumes at word 4');
+ assert.equal(vm.runInContext('state.wordListDaily[dateKey()]',ctx),3,'daily browsing counter increments');
+ console.log('PASS: V5.10.3 list-first, no filter form, auto-scroll isolation, unknown-only mistakes, per-book scroll logic');
+ console.log('PASS: V5 state goals, 1001 resume, 3-sec undo, due queue, reader progress, app smoke, primary wordbook loaded');
+})().catch(e=>{console.error(e);process.exitCode=1});

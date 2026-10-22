@@ -1,0 +1,15 @@
+'use strict';
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+const base=path.join(__dirname,'../app/src/main/assets');
+const safety=require(path.join(base,'state-safety.js'));
+const raw=JSON.stringify({settingsVersion:1,vocab:{known:{due:'2026-10-21'}},dayTasks:{}});
+assert(safety.valid(raw));
+assert(!safety.valid('{broken'));
+assert(!safety.valid(JSON.stringify({settingsVersion:0,vocab:{},dayTasks:{}})));
+assert.equal(safety.checksum(raw),safety.checksum(raw));
+assert.notEqual(safety.checksum(raw),safety.checksum(raw+' '));
+const backup=fs.readFileSync(path.join(base,'backup.html'),'utf8');
+assert(backup.includes('PipiStateSafety.latest()')&&backup.includes('PipiBackup.applyStorage('));
+const app=fs.readFileSync(path.join(base,'app.js'),'utf8');
+assert(app.includes('window.PipiStateSafety?.schedule(raw,urgent)'));
+console.log('PASS: isolated state snapshot validation and recovery UI wiring');
