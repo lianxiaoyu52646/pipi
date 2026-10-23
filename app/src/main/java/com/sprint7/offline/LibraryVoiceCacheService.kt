@@ -56,6 +56,15 @@ class LibraryVoiceCacheService : Service() {
                 current.put("state", "recovering")
                 current.put("error", "后台服务心跳超过90秒未更新；恢复闹钟和前台服务正在尝试续接")
             }
+            val realWrite=current.optLong("lastWrittenAt",0L)
+            val writeAge=if(realWrite>0L) (System.currentTimeMillis()-realWrite).coerceAtLeast(0L) else 0L
+            val phase=current.optString("phase")
+            val trulyStalled=wanted && (state=="running" || state=="retrying") &&
+                phase=="generating" && realWrite>0L && writeAge>5L*60L*1000L
+            current.put("realWriteAgeMs",writeAge)
+                .put("stalled",trulyStalled)
+                .put("lastRecoveryReason",current.optString("lastRestartReason"))
+                .put("actualProduction",phase=="generating" && !trulyStalled && age<=90_000L)
             return current.toString()
         }
         fun cacheFolder(context: Context)=File(context.filesDir,"pipi-kokoro-library-v1")
@@ -82,6 +91,7 @@ class LibraryVoiceCacheService : Service() {
     @Volatile private var lastWrittenAt=0L  // a new PCM file was really written
     @Volatile private var activeSynthesisAt=0L
     @Volatile private var activeSynthesisChars=0
+    @Volatile private var activeSegmentKey=""
     @Volatile private var stallWarningAt=0L
     private var monitorThread: Thread?=null
     private val STALL_WARNING_MS=5L*60L*1000L
@@ -92,6 +102,17 @@ class LibraryVoiceCacheService : Service() {
     private var autoRestarts=0
     private var lastRestartReason=""
     private var completedStartAt=0L
+    private var processLease:KokoroProcessGate.Lease?=null
+    @Volatile private var modelLoadMs=0L
+    @Volatile private var lastSynthesisMs=0L
+    @Volatile private var lastDiskWriteMs=0L
+    @Volatile private var lastIndexCommitMs=0L
+    @Volatile private var synthesisRollingMs=0L
+    @Volatile private var generatedRollingClips=0
+    @Volatile private var generatedRollingAudioMs=0L
+    @Volatile private var deferredSegments=0
+    private var latestExitReason=""
+    private var latestExitAt=0L
     @Volatile private var newlyGeneratedClips=0
     @Volatile private var newlyGeneratedBytes=0L
     private fun stage(phase:String) {
@@ -116,6 +137,7 @@ class LibraryVoiceCacheService : Service() {
             .put("lastWrittenAt",lastWrittenAt)
             .put("activeSynthesisAt",activeSynthesisAt)
             .put("activeSynthesisChars",activeSynthesisChars)
+            .put("activeSegmentKey",activeSegmentKey)
             .put("lastNativeWorkAt",lastNativeWorkAt)
             .put("activeWriteAt",activeWriteAt)
             .put("startedAt",completedStartAt)
@@ -123,6 +145,14 @@ class LibraryVoiceCacheService : Service() {
             .put("newBytes",newlyGeneratedBytes)
             .put("autoRestarts",autoRestarts)
             .put("lastRestartReason",lastRestartReason)
+            .put("modelLoadMs",modelLoadMs).put("lastSynthesisMs",lastSynthesisMs)
+            .put("lastDiskWriteMs",lastDiskWriteMs).put("lastIndexCommitMs",lastIndexCommitMs)
+            .put("recentSynthesisClips",generatedRollingClips)
+            .put("recentSynthesisMs",synthesisRollingMs)
+            .put("recentAudioMs",generatedRollingAudioMs)
+            .put("deferredSegments",deferredSegments)
+            .put("latestExitReason",latestExitReason).put("latestExitAt",latestExitAt)
+            .put("diagnosticEvents",VoiceCacheDiagnostics.read(this).optJSONArray("events")?:JSONArray())
             .put("clipsPerHour",if(completedStartAt>0L)
                 newlyGeneratedClips.toLong()*3_600_000L / maxOf(1L,System.currentTimeMillis()-completedStartAt) else 0L)
             .put("updatedAt",System.currentTimeMillis())
@@ -238,10 +268,30 @@ class LibraryVoiceCacheService : Service() {
         lastRestartReason=if(autoRestore)previous?.optString("error")?.takeIf{it.isNotBlank()}
             ?: "Android后台服务重新启动" else if(sameTask)previous?.optString("lastRestartReason") ?: "" else ""
         lastNativeWorkAt=System.currentTimeMillis()
+        modelLoadMs=if(sameTask)previous?.optLong("modelLoadMs")?:0L else 0L
+        latestExitReason="";latestExitAt=0L
+        if(autoRestore){
+            val exit=VoiceCacheDiagnostics.latestProcessExit(this, (previous?.optLong("updatedAt")?:0L)-120_000L)
+            if(exit!=null){
+                latestExitReason=exit.optString("reason");latestExitAt=exit.optLong("at")
+                val lostKey=previous?.optString("activeSegmentKey")?:""
+                if(lostKey.length==64 && (latestExitReason=="原生层崩溃" || latestExitReason=="应用无响应(ANR)")) {
+                    try {
+                        val idx=VoiceCacheIndex(this,speaker,speed)
+                        try { idx.recordFailure(lostKey,"进程异常退出：$latestExitReason") }
+                        finally { idx.close() }
+                        VoiceCacheDiagnostics.record(this,"native_exit_segment",latestExitReason,lostKey)
+                    }catch(e:Exception){Log.w(TAG,"Unable to isolate crash segment",e)}
+                }
+                if(latestExitReason.isNotBlank() && previous?.optString("state")!="recovering")lastRestartReason=latestExitReason
+                VoiceCacheDiagnostics.record(this,"process_exit",latestExitReason)
+            }
+        }
+        VoiceCacheDiagnostics.record(this,if(autoRestore)"restart" else "start",lastRestartReason.ifBlank{"启动缓存服务"})
         completedStartAt=(if(sameTask)previous?.optLong("startedAt") ?: 0L else 0L).takeIf{it>0} ?: System.currentTimeMillis()
         newlyGeneratedClips=if(sameTask)previous?.optInt("newClips") ?: 0 else 0
         newlyGeneratedBytes=if(sameTask)previous?.optLong("newBytes") ?: 0L else 0L
-        activeSynthesisAt=0L;activeSynthesisChars=0;stallWarningAt=0L
+        activeSynthesisAt=0L;activeSynthesisChars=0;activeSegmentKey="";stallWarningAt=0L
         try {
             foreground()
             publish("running")
@@ -303,6 +353,18 @@ class LibraryVoiceCacheService : Service() {
                 // Persist *before* terminating the isolated native process.
                 autoRestarts += 1
                 lastRestartReason = kind
+                val stuckKey=activeSegmentKey
+                if(stuckKey.length==64 && (nativeHang || workHang || writeHang)) {
+                    try {
+                        // Persist this exact stuck segment BEFORE killing the JNI process.
+                        // The next run skips it briefly and can synthesize the following text.
+                        val idx=VoiceCacheIndex(this,lastSpeaker,lastSpeed)
+                        try { idx.recordFailure(stuckKey,kind) }
+                        finally { idx.close() }
+                        VoiceCacheDiagnostics.record(this,"watchdog_segment",kind,stuckKey)
+                    }catch(e:Exception){Log.w(TAG,"Unable to quarantine timed-out segment",e)}
+                }
+                VoiceCacheDiagnostics.record(this,"watchdog",kind)
                 publish("recovering","$kind，后台将重启独立语音缓存进程并从已完成片段续接")
                 // This SERVICE runs in :voice_cache, never in the UI process.
                 // A JNI call cannot reliably be interrupted in-process; killing
@@ -405,6 +467,7 @@ class LibraryVoiceCacheService : Service() {
                     if(lastWrittenAt>previousWrittenAt)failures=0
                     failures++
                     Log.w(TAG,"Cache synthesis interrupted; auto retry #$failures: $reason",e)
+                    VoiceCacheDiagnostics.record(this,"worker_retry",reason)
                     // Never silently clear the user's run-until-done choice. On
                     // low RAM / storage, back off longer and retry when resources
                     // recover. Existing verified clips are always reused.
@@ -484,8 +547,24 @@ class LibraryVoiceCacheService : Service() {
             while(stillWanted()) {
                 val job=index.next()
                 if(job==null) {
+                    // Pending clips under cooldown are NEVER considered finished.
+                    // Let healthy sentences go first, then retry isolated failures.
+                    deferredSegments=index.deferredCount()
+                    val remaining=index.counts()
+                    if(remaining.done<remaining.total){
+                        val delay=index.pendingCooldownMs()
+                        if(delay>0L){
+                            stage("waiting_failed_segments")
+                            publish("running","${deferredSegments}段等待单独重试，最早${(delay+999)/1000}秒后；已完成音频保留")
+                            sleepUntilRetry(minOf(delay,30_000L))
+                            continue
+                        }
+                        // Defensive: an unexpected SQL exclusion must not trigger an expensive final audit.
+                        throw IllegalStateException("存在未完成片段却无法取得待处理任务：${remaining.done}/${remaining.total}")
+                    }
                     if(alreadyCheckedCompletion) {
                         check(lastDone==lastTotal){"数据库状态与已生成片段不一致：$lastDone/$lastTotal"}
+                        deferredSegments=0
                         return true
                     }
                     stage("verifying")
@@ -505,6 +584,7 @@ class LibraryVoiceCacheService : Service() {
                     return true
                 }
                 alreadyCheckedCompletion=false
+                activeSegmentKey=job.key
                 lastBook=job.book
                 lastChapter=job.chapter
                 lastChapterTotal=job.chapterTotal
@@ -518,6 +598,7 @@ class LibraryVoiceCacheService : Service() {
                     lastDone+=added
                     lastProgressAt=System.currentTimeMillis()
                     lastChapterDone=job.chapterIndex
+                    activeSegmentKey=""
                     if(System.currentTimeMillis()-lastPublishedAt>1500L) publish("running")
                     continue
                 }
@@ -525,17 +606,31 @@ class LibraryVoiceCacheService : Service() {
                 if(model==null) {
                     stage("waiting_model")
                     if(!stillWanted())return false
+                    processLease=KokoroProcessGate.acquire(this,{stillWanted()},0L) {
+                        stage("waiting_model")
+                        publish("running","另一个进程正在使用Kokoro，正在安全等待释放，不会并发加载两份模型")
+                    } ?: return false
                     stage("loading_model")
-                    model=loadModel()
+                    val modelStarted=System.currentTimeMillis()
+                    try {model=loadModel()}catch(t:Throwable){
+                        try{processLease?.close()}catch(_:Throwable){}
+                        processLease=null
+                        throw t
+                    }
+                    modelLoadMs=System.currentTimeMillis()-modelStarted
                     lastNativeWorkAt=System.currentTimeMillis()
                     stage("generating")
                 }
                 val text=job.text
+                val synthStarted=System.nanoTime()
                 activeSynthesisAt=System.currentTimeMillis()
                 activeSynthesisChars=text.length
+                // Persist the exact current key BEFORE entering JNI, so a native
+                // crash can quarantine the right segment on the next service start.
+                publish("running")
                 Log.d(TAG,"synth begin book=${job.book} ch=${job.chapter} segment=${job.chapterIndex}/${job.chapterTotal} chars=${text.length}")
-                val pieces=NarrationSynthesisPlan.pieces(text)
                 val samples=try {
+                    val pieces=NarrationSynthesisPlan.pieces(text)
                     val blocks=ArrayList<FloatArray>(pieces.size)
                     var sampleCount=0L
                     for(piece in pieces) {
@@ -554,7 +649,24 @@ class LibraryVoiceCacheService : Service() {
                     var pos=0
                     for(block in blocks){System.arraycopy(block,0,joined,pos,block.size);pos+=block.size}
                     joined
+                }catch(t:Throwable){
+                    if(t is VirtualMachineError || t is ThreadDeath || t is LinkageError)throw t
+                    // Isolate one bad sentence instead of restarting the entire 82k-item queue.
+                    val reason=t.message?.takeIf{it.isNotBlank()}?:t.javaClass.simpleName
+                    val attempts=index.recordFailure(job.key,reason)
+                    deferredSegments=index.deferredCount()
+                    VoiceCacheDiagnostics.record(this,"segment_failure","第${attempts}次：$reason",job.key)
+                    lastError="片段${job.chapterIndex}合成失败（第${attempts}次），已隔离等待重试；其他片段继续生成"
+                    try {model?.free()} catch(_:Throwable){}
+                    model=null
+                    try {processLease?.close()}catch(_:Throwable){}
+                    processLease=null
+                    lastNativeWorkAt=System.currentTimeMillis()
+                    activeSegmentKey=""
+                    publish("running",lastError)
+                    continue
                 }finally {activeSynthesisAt=0L;activeSynthesisChars=0}
+                lastSynthesisMs=(System.nanoTime()-synthStarted)/1_000_000L
                 if(!stillWanted())return false
                 val smooth=NarrationPcmPacing.smooth(samples,model.sampleRate(),text)
                 if(smooth.isEmpty())throw IllegalStateException("语音合成返回空音频")
@@ -564,6 +676,7 @@ class LibraryVoiceCacheService : Service() {
                 }
                 val pcm=ShortArray(smooth.size){i->(smooth[i].coerceIn(-1f,1f)*32767).toInt().toShort()}
                 activeWriteAt=System.currentTimeMillis()
+                val diskStarted=System.nanoTime()
                 try {
                     if(!disk.put(job.key,pcm,rate)) {
                         throw IllegalStateException("语音片段写盘失败(采样点=${pcm.size}，采样率=$rate)，检查存储空间和缓存片段长度")
@@ -571,15 +684,27 @@ class LibraryVoiceCacheService : Service() {
                     check(disk.has(job.key)){"语音片段写入后校验失败，将自动重试"}
                     // The PCM file is durably closed and validated BEFORE this
                     // transaction increments completed occurrences.
+                    val diskDone=System.nanoTime()
                     val added=index.complete(job.key)
+                    lastIndexCommitMs=(System.nanoTime()-diskDone)/1_000_000L
+                    lastDiskWriteMs=(diskDone-diskStarted)/1_000_000L
                     lastDone+=added
                     lastProgressAt=System.currentTimeMillis()
                     lastWrittenAt=lastProgressAt
+                    // A bounded recent window measures real synthesis throughput, not 27h elapsed time.
+                    if(generatedRollingClips>=50){
+                        generatedRollingClips=0;synthesisRollingMs=0L;generatedRollingAudioMs=0L
+                    }
+                    generatedRollingClips++
+                    synthesisRollingMs+=lastSynthesisMs
+                    generatedRollingAudioMs+=pcm.size.toLong()*1000L/rate
                     newlyGeneratedClips++
+                    if(deferredSegments>0)deferredSegments=index.deferredCount()
                     newlyGeneratedBytes+=pcm.size.toLong()*2L+16L
                     lastError=""
                 }finally {activeWriteAt=0L}
                 lastChapterDone=job.chapterIndex
+                activeSegmentKey=""
                 generatedSinceNotice++
                 if(generatedSinceNotice>=5 || System.currentTimeMillis()-lastPublishedAt>=1300L) {
                     publish("running");generatedSinceNotice=0
@@ -588,6 +713,8 @@ class LibraryVoiceCacheService : Service() {
             return false
         }finally {
             try{model?.free()}catch(_:Throwable){}
+            try{processLease?.close()}catch(_:Throwable){}
+            processLease=null
             index.close()
         }
     }

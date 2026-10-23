@@ -4,11 +4,14 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application android:allowBackup="false" android:usesCleartextTraffic="false"
         android:label="皮皮" android:icon="@drawable/app_icon_baby" android:roundIcon="@drawable/app_icon_baby"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <service android:name=".ArticlePlaybackService" android:exported="false"
+                 android:stopWithTask="false" android:foregroundServiceType="mediaPlayback" />
         <service android:name=".LibraryVoiceCacheService" android:exported="false" android:stopWithTask="false"
                  android:foregroundServiceType="specialUse" android:process=":voice_cache">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"

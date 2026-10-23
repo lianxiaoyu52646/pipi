@@ -91,3 +91,9 @@
 #viewport.pipi-word-scroll-active .pipi-list-content{overflow:visible!important}
 #viewport.pipi-word-scroll-active .pipi-list-meaning{-webkit-line-clamp:3;max-height:none;min-height:0;overflow:hidden}
 #viewport.pipi-word-scroll-active #pipiVirtualRows{overflow-anchor:none}
+
+/* V5.12.11 review list: plain word first, no translation until reveal. */
+.v5-review-hidden-answer{color:#a2a8bb!important;font-style:italic}
+.v5-review-item{min-height:82px}
+#pipiReviewMore[hidden]{display:none!important}
+.v5-review-sources{margin:10px 0}.v5-review-sources summary{color:#7666ca;cursor:pointer;padding:8px 0}

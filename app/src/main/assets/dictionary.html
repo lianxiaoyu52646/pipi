@@ -6,7 +6,7 @@
 <section class="recent" id="recentSection" hidden><h3>最近查过的词</h3><div class="chips" id="recentWords"></div></section>
 <section class="download"><div><strong>手机真正离线使用</strong><p>Android 版词典随安装包内置，断网即可使用，无需二次缓存。网页版可选择预缓存用于离线查词。</p></div><button type="button" id="offlineBtn">将完整词典缓存到手机</button><small id="cacheProgress"></small></section>
 </main><footer>数据来源：skywind3000/ECDICT · MIT License · 本地按需读取，不上传你查询的词语</footer></div>
-<script src="./fsrs.js"></script><script src="./ecdict-offline.js"></script><script src="./tts-ui.js"></script><script src="./full-dict.js"></script><script>
+<script src="./fsrs.js"></script><script src="./state-safety.js"></script><script src="./ecdict-offline.js"></script><script src="./tts-ui.js"></script><script src="./full-dict.js"></script><script>
 document.addEventListener('click',function(e){
  const a=e.target.closest('a[href]');if(!a)return;
  if(a.hasAttribute('data-pipi-return')){e.preventDefault();window.PipiWebNavigation.back(a.getAttribute('href').replace(/^\.\//,''));return}

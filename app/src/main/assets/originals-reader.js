@@ -15,13 +15,21 @@ const memory=new Map();
 let cachedIds=new Set();
 const ctx={book:null,work:null,chapter:0,page:0,font:Number(localStorage.getItem('sprint7_originals_font')||19),word:null,sentence:'',toastTimer:0,pages:[],resumeOffset:null,restoreAnchor:null,anchor:null,suppressTapUntil:0};
 const now=()=>new Date().toISOString();
-const getMain=()=>{const raw=localStorage.getItem(KEY);
+const getMain=()=>{let raw=localStorage.getItem(KEY);let sqlite='';try{sqlite=window.SprintAndroid?.getLearningStateFromSQLite?.()||''}catch(e){}
+ if(window.PipiStateSafety?.valid(sqlite)){const rev=x=>{try{return Number(JSON.parse(x)._pipiRevision)||0}catch(e){return 0}};if(!window.PipiStateSafety.valid(raw)||rev(sqlite)>rev(raw)){raw=sqlite;try{localStorage.setItem(KEY,raw)}catch(e){}}}
  if(raw===null)return {settingsVersion:1,vocab:{},mistakes:{},readerWords:{},dayTasks:{},testResults:[]};
  if(!window.PipiStateSafety?.valid(raw))throw Error('原有学习记录异常，禁止覆盖；请先前往数据备份页恢复');
  return JSON.parse(raw);
 };
-const putMain=s=>{try{const raw=JSON.stringify(s);localStorage.setItem(KEY,raw);if(localStorage.getItem(KEY)!==raw)throw Error('存储校验失败');window.PipiStateSafety?.schedule(raw,true);return true}catch(e){toast('无法保存生词记录：请先导出学习数据');return false}};
-const getProgress=()=>{try{return JSON.parse(localStorage.getItem('sprint7_originals_progress')||'{}')}catch{return {}}};
+const putMain=s=>{try{s._pipiRevision=(Number(s._pipiRevision)||0)+1;const raw=JSON.stringify(s);if(window.SprintAndroid?.saveLearningStateIfRevision){if(!window.SprintAndroid.saveLearningStateIfRevision(raw,s._pipiRevision-1))throw Error('学习数据冲突，请关闭并重新进入阅读器');}else if(window.SprintAndroid?.saveLearningStateToSQLite&&!window.SprintAndroid.saveLearningStateToSQLite(raw))throw Error('SQLite保存失败');localStorage.setItem(KEY,raw);if(localStorage.getItem(KEY)!==raw)throw Error('存储校验失败');window.PipiStateSafety?.schedule(raw,true);return true}catch(e){toast('无法保存生词记录：请先导出学习数据');return false}};
+const getProgress=()=>{
+ let local={};try{local=JSON.parse(localStorage.getItem('sprint7_originals_progress')||'{}')}catch(_){}
+ let sql={};try{sql=JSON.parse(window.SprintAndroid?.getReaderProgressFromSQLite?.()||'{}')}catch(_){}
+ const merged=window.PipiBookmarkMerge?.merge?.(local,sql)||{...local,...sql};
+ // No silent rollback to a WebView mirror. Only initialize native on first use.
+ if(!Object.keys(sql).length&&Object.keys(local).length)try{window.SprintAndroid?.saveReaderProgressToSQLite?.(JSON.stringify(merged))}catch(_){}
+ return merged;
+};
 function readingFraction(){if(!ctx.work?.sections?.length)return 0;
  const before=ctx.work.sections.slice(0,ctx.chapter).reduce((sum,x)=>sum+(x.wordCount||0),0);
  const section=ctx.work.sections[ctx.chapter],portion=(section?.wordCount||0)*((ctx.page+1)/Math.max(ctx.pages.length,1));
@@ -29,7 +37,7 @@ function readingFraction(){if(!ctx.work?.sections?.length)return 0;
 }
 function setProgress(){const s=getProgress(),percent=readingFraction();
  s[ctx.book.id]={chapter:ctx.chapter,page:ctx.page,offset:ctx.pages[ctx.page]?.start||0,paragraph:ctx.anchor?.chapter===ctx.chapter?ctx.anchor.paragraph:null,paragraphFraction:ctx.anchor?.chapter===ctx.chapter?ctx.anchor.fraction:0,percent,last:now(),schema:2};
- try{localStorage.setItem('sprint7_originals_progress',JSON.stringify(s));window.PipiStateSafety?.schedule(localStorage.getItem(KEY));$('cacheMetric').textContent='书签已保存'}
+ try{const raw=JSON.stringify(s);if(window.SprintAndroid?.saveReaderProgressToSQLite&&!window.SprintAndroid.saveReaderProgressToSQLite(raw))throw Error('SQLite 书签保存失败');localStorage.setItem('sprint7_originals_progress',raw);window.PipiStateSafety?.schedule(localStorage.getItem(KEY));$('cacheMetric').textContent='书签已保存'}
  catch(e){$('cacheMetric').textContent='书签保存失败';const t=Date.now();if(!ctx.lastSaveError||t-ctx.lastSaveError>10000){toast('阅读位置保存失败，请先导出学习记录');ctx.lastSaveError=t}}
  $('readingPercent').textContent=percent+'% 已读';$('readingProgressFill').style.width=percent+'%';if($('playerPercent'))$('playerPercent').textContent=percent+'%';
 }
@@ -119,6 +127,18 @@ function parseOriginal(raw,book){if(typeof raw!=='string'||raw.length<20000||raw
  const work={id:book.id,source:book.source,number:book.pg,title:book.enTitle,sections,wordCount:sections.reduce((n,s)=>n+s.wordCount,0),rawLength:raw.length,paragraphSchema:window.PipiReaderParagraphs.CURRENT_SCHEMA,cachedAt:now()};
  if(work.wordCount<Math.max(8000,book.expectedSections*140))throw Error('正文长度异常，不能确认为整本原著');return work;
 }
+// Parse the large bundled Gutenberg text off the WebView UI thread. The
+// worker uses exactly the same chapter validation code as the legacy parser.
+function parseOriginalOffThread(raw,book){
+ if(typeof Worker==='undefined')return Promise.resolve().then(()=>parseOriginal(raw,book));
+ return new Promise((resolve,reject)=>{
+  let worker,finished=false;
+  const done=(err,work)=>{if(finished)return;finished=true;clearTimeout(timeout);worker?.terminate();err?reject(err):resolve(work)};
+  const timeout=setTimeout(()=>done(Error('原著解析超时，请重试')),90000);
+  try{worker=new Worker('./reader-parser-worker.js');worker.onmessage=e=>{const d=e.data||{};if(d.ok)done(null,d.work);else done(Error(d.error||'章节解析失败'))};worker.onerror=e=>done(Error('原著后台解析失败：'+(e.message||'未知错误')));worker.postMessage({raw,book});}
+  catch(e){done(e)}
+ });
+}
 async function downloadBook(book){
  // Despite legacy function name, this ONLY loads a bundled asset. It never downloads from the Internet.
  if(ctx.book?.id!==book.id)return;
@@ -128,7 +148,7 @@ async function downloadBook(book){
    const response=await fetch('./books/'+book.id+'.txt',{cache:'force-cache'});
    if(!response.ok)throw Error('找不到内置原文文件 (HTTP '+response.status+')');
    const raw=await response.text();
-   const work=parseOriginal(raw,book);
+   const work=await parseOriginalOffThread(raw,book);
    if(ctx.book?.id!==book.id)return;
    // Cache parsed chapter structure as an optimization; source always remains in APK.
    try{await store('put',book.id,{work})}catch(e){console.warn('Local chapter cache full; bundled reading still works',e)}
@@ -152,7 +172,7 @@ async function chooseBook(id,push=true){stopArticleReading();const book=BOOKS.fi
 }
 function showReader(){if(!ctx.work)return;document.body.classList.toggle('reading-focus',localStorage.getItem('sprint7_reader_focus')==='1');$('focusReading').setAttribute('aria-pressed',String(document.body.classList.contains('reading-focus')));if($('focusExit'))$('focusExit').hidden=!document.body.classList.contains('reading-focus');$('focusPlay').hidden=!document.body.classList.contains('reading-focus');setNativeImmersive(document.body.classList.contains('reading-focus'));$('loadPane').hidden=true;$('readingPane').hidden=false;document.body.classList.add('reading-active');ctx.chapter=Math.min(ctx.chapter,ctx.work.sections.length-1);renderChapter()}
 function sentenceContext(p,word){const pieces=window.PipiReaderSentences?.splitSentences(p)||[{text:p}];const matching=pieces.find(x=>new RegExp('\\b'+word.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\b','i').test(x.text));return (matching?.text||p).trim().slice(0,540)}
-function markedSet(){const s=getMain(),out=new Set();for(const item of Object.values(s.mistakes||{}))if(item.kind==='readingword'&&item.status!=='mastered')out.add(item.unit);return out}
+function markedSet(){const s=getMain(),out=new Set();for(const item of Object.values(s.mistakes||{}))if(item.kind==='readingword'&&item.enrollment==='manual'&&item.status!=='removed')out.add(item.unit);return out}
 function richParagraph(p,flagged){return p.split(/([A-Za-z]+(?:[’'-][A-Za-z]+)*)/).map((t,i)=>{if(!i&&t==='')return '';return /^[A-Za-z]/.test(t)?`<button type="button" class="token ${flagged.has('lex:'+t.toLowerCase().replace(/’/g,"'"))?'flagged':''}" data-word="${esc(t)}" title="查询单词 ${esc(t)}">${esc(t)}</button>`:esc(t)}).join('')}
 // Reflowable e-reader pages. Split only at word boundaries; no content is removed.
 // The page size reflects current viewport dimensions and font size rather than 9 arbitrary paragraphs.
@@ -336,16 +356,19 @@ async function openWord(word,paragraph){
 
 function addUnknown(){if(!ctx.word)return;const word=ctx.word,unit='lex:'+word,ss=getMain(),entry=ss.mistakes?.['word:'+unit+':0']||{},old=ss.vocab?.[unit]||{},zh=ctx.lookupTranslation||lookupLocal(word)||$('wordChinese').textContent;ss.settingsVersion=1;ss.vocab=ss.vocab||{};ss.mistakes=ss.mistakes||{};ss.mistakeEvents=ss.mistakeEvents||[];ss.readerWords=ss.readerWords||{};
  const info=(ss.readerWords[unit]||{});ss.readerWords[unit]={...info,id:unit,word,zh:validMeaning(zh)?zh:'待查释义',level:'名著',topic:'英文原著',example:ctx.sentence,book:'reader'};
- const repeated=entry.status==='mastered';if(repeated)old.knownCount=0;
+ // A legacy 'mastered' entry stays in the notebook; keep its FSRS history intact.
  const next=window.SprintFSRS?.schedule?.(old,false)||{dueAt:new Date(Date.now()+10*60000).toISOString(),lastReviewed:now()};ss.vocab[unit]={...old,...next,knownCount:old.knownCount||0,knownTotal:old.knownTotal||0,lapses:(old.lapses||0)+1,last:new Date().toISOString().slice(0,10)};
- const id='word:'+unit+':0';ss.mistakes[id]={...entry,kind:'readingword',unit,q:0,detail:'阅读原著时标记不会',source:ctx.book.zhTitle+' 原著',bookId:ctx.book.id,sentence:ctx.sentence,sentenceZh:'',seen:(entry.seen||0)+1,success:ss.vocab[unit].knownCount,status:'pending',first:entry.first||now(),last:now(),dueAt:next.dueAt};ss.mistakeEvents.push({id,kind:'readingword',unit,at:now(),source:ctx.book.zhTitle+' 原著',bookId:ctx.book.id,detail:'主动标记不会'});
+ const id='word:'+unit+':0';const source={bookId:ctx.book.id,title:ctx.book.zhTitle+' 原著',sentence:ctx.sentence,sentenceZh:''};const origins=Array.isArray(entry.origins)?entry.origins.slice():[];
+ if(!origins.length&&(entry.bookId||entry.sentence))origins.push({bookId:entry.bookId||'',title:entry.source||'',sentence:entry.sentence||'',sentenceZh:entry.sentenceZh||''});
+ if(!origins.some(x=>x.bookId===source.bookId&&x.sentence===source.sentence))origins.push(source);
+ ss.mistakes[id]={...entry,kind:'readingword',unit,q:0,detail:'阅读原著时标记不会',source:ctx.book.zhTitle+' 原著',bookId:ctx.book.id,sentence:ctx.sentence,sentenceZh:'',origins:origins.slice(-40),enrollment:'manual',seen:(entry.seen||0)+1,success:ss.vocab[unit].knownCount,status:'pending',first:entry.first||now(),last:now(),dueAt:next.dueAt};ss.vocab[unit].reviewPaused=false;delete ss.vocab[unit]._pipiLegacyPaused;ss.mistakeEvents.push({id,kind:'readingword',unit,at:now(),source:ctx.book.zhTitle+' 原著',bookId:ctx.book.id,detail:'主动标记不会'});
  if(ss.mistakeEvents.length>12000)ss.mistakeEvents=ss.mistakeEvents.slice(-12000);
  ss.v5||={schemaVersion:5,bookGoals:{},events:[],createdAt:now()};ss.v5.events||=[];
  if(!entry.first)ss.v5.events.push({id:'reader-'+ctx.book.id+'-'+unit+'-'+Date.now(),at:now(),type:'reader_save',wordId:unit,bookId:ctx.book.id,chapter:ctx.chapter,sourceSentence:ctx.sentence});
  if(ss.v5.events.length>18000)ss.v5.events=ss.v5.events.slice(-18000);
  if(putMain(ss)){toast(`「${word}」已加入 FSRS 生词本`);$('wordOverlay').hidden=true;document.querySelectorAll('#readingText [data-word]').forEach(el=>{if(el.dataset.word.toLowerCase()===word)el.classList.add('flagged')})}
 }
-function markKnown(){if(!ctx.word)return;const word=ctx.word,unit='lex:'+word,s=getMain();const m=s.mistakes?.['word:'+unit+':0'];if(!m){toast('已跳过；不认识时点「不会」收录');$('wordOverlay').hidden=true;return}const old=s.vocab?.[unit]||{},next=window.SprintFSRS?.schedule?.(old,true)||{dueAt:new Date(Date.now()+86400000).toISOString()};const n=(Number(old.knownCount)||0)+1;s.vocab[unit]={...old,...next,knownCount:n,knownTotal:(old.knownTotal||0)+1,reps:(old.reps||0)+1};m.success=n;m.status=n>=7?'mastered':'pending';m.dueAt=next.dueAt;m.last=now();if(n>=7)m.masteredAt=now();putMain(s);$('wordOverlay').hidden=true;toast(n>=7?'累计7次「会」，已移入已掌握':`已记住 ${n}/7 次 · FSRS 更新复习时间`);renderChapter()}
+function markKnown(){if(!ctx.word)return;const word=ctx.word,unit='lex:'+word,s=getMain();const m=s.mistakes?.['word:'+unit+':0'];if(!m||m.status==='removed'||(m.enrollment!=='manual'&&m.kind!=='readingword')){toast('已跳过；不认识时点「不会」收录');$('wordOverlay').hidden=true;return}const old=s.vocab?.[unit]||{},next=window.SprintFSRS?.schedule?.(old,true)||{dueAt:new Date(Date.now()+86400000).toISOString()};const n=(Number(old.knownCount)||0)+1;s.vocab[unit]={...old,...next,knownCount:n,knownTotal:(old.knownTotal||0)+1,reps:(old.reps||0)+1};m.success=n;m.status='pending';delete m.masteredAt;m.dueAt=next.dueAt;m.last=now();if(putMain(s)){ $('wordOverlay').hidden=true;toast('已按 FSRS 安排下次复习，仍保留在生词本');renderChapter() }}
 function toast(msg){const t=$('toast');t.hidden=false;t.textContent=msg;clearTimeout(ctx.toastTimer);ctx.toastTimer=setTimeout(()=>t.hidden=true,2900)}
 $('bookGrid').addEventListener('click',e=>{const b=e.target.closest('[data-book]');if(b)chooseBook(b.dataset.book)});
 $('readerTopBack').addEventListener('click',e=>{e.preventDefault();if(ctx.book)showShelf();else window.PipiWebNavigation?.back('index.html?nav=library')});$('homeShelf').addEventListener('click',()=>ctx.book?showShelf():window.PipiWebNavigation?.back('index.html?nav=library'));$('shelfCrumb').addEventListener('click',()=>{if(ctx.book)showShelf();else renderShelf()});$('selectBook').addEventListener('click',()=>showShelf());/* Bundled reader opens already-installed books automatically. */

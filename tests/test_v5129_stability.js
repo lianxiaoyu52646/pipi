@@ -1,0 +1,30 @@
+'use strict';
+const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),assert=require('node:assert/strict');
+const base=path.join(__dirname,'../app/src/main/assets');
+const app=fs.readFileSync(path.join(base,'app.js'),'utf8');
+const reader=fs.readFileSync(path.join(base,'originals-reader.js'),'utf8');
+const books=fs.readFileSync(path.join(base,'wordbooks.js'),'utf8');
+const guard=require(path.join(base,'state-safety.js'));
+function make(revision,n){return JSON.stringify({settingsVersion:1,vocab:{['w'+n]:{dueAt:'2026-10-22'}},dayTasks:{},_pipiRevision:revision})}
+const get=app.slice(app.indexOf('function getState(){'),app.indexOf('\nlet state=getState();'));
+function boot(web,sql){const storage={data:web};const c={KEY:'sprint7_complete_v1',window:{PipiStateSafety:guard,SprintAndroid:{getLearningStateFromSQLite:()=>sql}},localStorage:{getItem:()=>storage.data,setItem:(k,v)=>{storage.data=v}},document:{getElementById:()=>({innerHTML:''})},defaultState:()=>({settingsVersion:1,vocab:{},dayTasks:{}}),JSON,Error,Number,console};vm.createContext(c);vm.runInContext(get+'\nstateResult=getState()',c);return {state:c.stateResult,web:storage.data}}
+assert(boot(make(10,10),make(11,11)).state.vocab.w11,'newer committed SQLite record must win after WebView crash');
+assert(boot(make(13,13),make(12,12)).state.vocab.w13,'older SQLite copy must never overwrite a newer local JSON restore');
+assert(boot('{bad json',make(15,15)).state.vocab.w15,'corrupt local state should be recoverable from checksummed SQLite');
+assert.match(app,/function recyclePassedWordRows\(/);
+assert.match(app,/listTopSpacerPx\+=height/);
+assert.match(app,/data-row-index/);
+assert.match(app,/pipiListMore/);
+const slice=app.slice(app.indexOf('function updateWordListProgress('),app.indexOf('function appendWordListRows('));
+assert.doesNotMatch(slice.split('\n').filter(x=>!x.trim().startsWith('//')).join('\n'),/reviewMemory\(|upsertMistake\(/,'swiping past a word must never enroll it');
+assert.match(app,/window\.SprintAndroid\?\.clearLearningStateSQLite/);
+assert.match(app,/window\.PipiStateSafety\?\.clear/);
+assert.match(app,/SprintBooks\.importText\(key,text\)/);
+assert.match(books,/fingerprintItems\(items\)/);
+assert.match(reader,/saveReaderProgressToSQLite/);
+assert.match(reader,/getReaderProgressFromSQLite/);
+const ctx={window:{},indexedDB:undefined,console,Map,Promise,Set,Date,setTimeout,clearTimeout,Math};
+vm.createContext(ctx);vm.runInContext(books,ctx);
+const first=[{word:'apple',zh:'苹果',example:'fruit'},{word:'pear',zh:'梨'}],changed=[{word:'apple',zh:'水果',example:'fruit'},{word:'pear',zh:'梨'}];
+assert.notEqual(ctx.window.SprintBooks.fingerprintItems(first),ctx.window.SprintBooks.fingerprintItems(changed),'same count with different content must change fingerprint');
+console.log('PASS V5.12.9 SQLite revision arbitration, bounded scroll wiring, unknown-only FSRS, import fingerprint, reader progress bridge');

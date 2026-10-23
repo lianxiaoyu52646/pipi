@@ -28,6 +28,7 @@ class NarrationAudioCache(private val directory: File, private val maxBytes: Lon
         val file = fileFor(key)
         if (!file.isFile) return null
         return try {
+            if(!verifyDigestIfPresent(key)){file.delete();digestFile(key).delete();return null}
             DataInputStream(BufferedInputStream(FileInputStream(file))).use { input ->
                 if (input.readInt() != magic || input.readInt() != version) error("cache version")
                 val rate = input.readInt()
@@ -75,6 +76,9 @@ class NarrationAudioCache(private val directory: File, private val maxBytes: Lon
                 temp.delete()
                 return false
             }
+            // Integrity metadata is optional for legacy v2 clips but mandatory
+            // for newly generated clips; the PCM byte format never changes.
+            digestFile(key).writeText(fileSha256(target),Charsets.UTF_8)
             saves++
             if (saves % 12 == 0 && maxBytes != Long.MAX_VALUE) trim()
             return true
@@ -97,6 +101,38 @@ class NarrationAudioCache(private val directory: File, private val maxBytes: Lon
         } catch (_: Exception) { file.delete(); false }
     }
 
+    private fun digestFile(key:String)=File(directory,"$key.sha256")
+    private fun fileSha256(file:File):String {
+        val digest=MessageDigest.getInstance("SHA-256")
+        FileInputStream(file).use{input->
+            val buf=ByteArray(64*1024)
+            while(true){val n=input.read(buf);if(n<0)break;digest.update(buf,0,n)}
+        }
+        return digest.digest().joinToString(""){ "%02x".format(it) }
+    }
+    private fun verifyDigestIfPresent(key:String):Boolean {
+        val side=digestFile(key)
+        return !side.exists() || side.readText(Charsets.UTF_8).trim()==fileSha256(fileFor(key))
+    }
+    /** Strong verification only on full audit / actual playback; ordinary queue lookups
+     * stay fast (header + length) and never hash all 80k audio clips on each resume.
+     * Legacy v2 clips receive a checksum sidecar on their first full audit.
+     */
+    fun hasDeep(key:String):Boolean {
+        if(!has(key))return false
+        val file=fileFor(key)
+        return try{
+            val side=digestFile(key)
+            val digest=fileSha256(file)
+            if(side.exists() && side.readText(Charsets.UTF_8).trim()!=digest){
+                file.delete();side.delete();false
+            }else {
+                if(!side.exists())side.writeText(digest,Charsets.UTF_8)
+                true
+            }
+        }catch(_:Exception){false}
+    }
+
     fun trim() {
         if (maxBytes == Long.MAX_VALUE && maxEntries == Int.MAX_VALUE) return
         val files = directory.listFiles()?.filter { it.isFile && it.extension == "pcm" }
@@ -104,7 +140,7 @@ class NarrationAudioCache(private val directory: File, private val maxBytes: Lon
         var total = 0L
         for ((index, file) in files.withIndex()) {
             val bytes = file.length()
-            if (total + bytes > maxBytes || index >= maxEntries) file.delete()
+            if (total + bytes > maxBytes || index >= maxEntries) { file.delete();File(directory,file.nameWithoutExtension+".sha256").delete() }
             else total += bytes
         }
     }

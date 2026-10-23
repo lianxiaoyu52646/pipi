@@ -4,7 +4,7 @@ const html=fs.readFileSync(path.join(__dirname,'../app/src/main/assets/voice-cac
 const js=html.match(/<script>\s*(\(function\(\)\{'use strict'[^]*?\}\)\(\);)\s*<\/script>/)?.[1];
 assert(js,'cache UI script missing');
 const fake=()=>({textContent:'',style:{width:''},classList:{running:null,toggle:function(_name,flag){this.running=flag}},disabled:false,value:''});
-const elements=Object.fromEntries(['detail','start','pause','clear','percent','fill','progress','counter','state','book','status','voice','speed','realClips','realBytes','realSpeed','recoveryCount'].map(x=>[x,fake()]));
+const elements=Object.fromEntries(['detail','start','pause','clear','percent','fill','progress','counter','state','book','status','voice','speed','realClips','realBytes','realSpeed','recoveryCount','cacheLogs'].map(x=>[x,fake()]));
 let status={state:'running',phase:'generating',done:60,total:100,chapterTotal:100,chapterDone:60,
  lastProgressAt:Date.now()-601000,lastWrittenAt:Date.now()-602000,phaseStartedAt:Date.now()-600000};
 const w={SprintAndroid:{getLibraryVoiceCacheStatus:()=>JSON.stringify(status)},setInterval:()=>{},setTimeout:()=>{},

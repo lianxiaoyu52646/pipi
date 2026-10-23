@@ -24,12 +24,12 @@ import java.util.concurrent.atomic.AtomicLong
  * PCM to AudioTrack so the next sentence can be prefetched without blocking playback.
  * Both model and voices are bundled in the APK; no network/system TTS is used.
  */
-class ArticleVoiceEngine(private val context: Context, private val onEvent: EventCallback) {
+class ArticleVoiceEngine(private val context: Context, onEvent: EventCallback) {
     fun interface EventCallback { fun onEvent(event: JSONObject) }
     private data class Segment(val chapter: Int, val page: Int, val part: Int, val sub: Int, val paragraph: Int, val sentence: Int, val text: String)
     private data class AudioSegment(val index: Int, val segment: Segment, val samples: ShortArray, val rate: Int)
     private data class PlaybackMarker(val index: Int, val startingFrame: Long)
-    private class Session(val id: Long, val token: String, first: List<Segment>) {
+    private class Session(val id: Long, val token: String, first: List<Segment>, val cacheOnly: Boolean = false) {
         @Volatile var paused = false
         @Volatile var synthesisDone = false
         @Volatile var ended = false
@@ -74,10 +74,15 @@ class ArticleVoiceEngine(private val context: Context, private val onEvent: Even
     // JNI object is confined to synthWorker.
     private var kokoro: OfflineTts? = null
     private var holdsKokoroGate = false
+    private var processLease: KokoroProcessGate.Lease? = null
     private val audioCache = object : LruCache<String, NarrationAudioCache.Clip>(16 * 1024 * 1024) {
         override fun sizeOf(key: String, value: NarrationAudioCache.Clip) = value.pcm.size * 2
     }
     private val diskCache = NarrationAudioCache(LibraryVoiceCacheService.cacheFolder(context), Long.MAX_VALUE, Int.MAX_VALUE)
+
+    @Volatile private var eventCallback: EventCallback? = onEvent
+    fun setEventCallback(callback: EventCallback?) { eventCallback=callback }
+    init { KokoroModelGuard.registerReader(this) }
 
     private fun emit(code: String, run: Session? = null, index: Int = -1, message: String = "") {
         val event = JSONObject().put("code", code).put("session", run?.id ?: epoch.get())
@@ -87,7 +92,8 @@ class ArticleVoiceEngine(private val context: Context, private val onEvent: Even
             event.put("chapter", s.chapter).put("page", s.page).put("part", s.part).put("sub", s.sub)
                 .put("paragraph", s.paragraph).put("sentence", s.sentence)
         }
-        onEvent.onEvent(event)
+        eventCallback?.onEvent(event)
+        ArticlePlaybackService.onEngineEvent(event)
     }
 
     private fun parseSegments(json: String): List<Segment> {
@@ -119,6 +125,23 @@ class ArticleVoiceEngine(private val context: Context, private val onEvent: Even
         markerWorker.execute { dispatchMarkers(run) }
     }
 
+    /** Play existing verified PCM while the separate library cache keeps synthesizing.
+     * Never acquire the Kokoro model gate in this mode. If a clip is missing,
+     * report it rather than silently stopping the user's background job.
+     */
+    fun speakCachedBatch(json: String, rate: Float, speakerId: Int, requestToken: String) {
+        if (closed) return
+        val segments = try { parseSegments(json) } catch (e: Exception) {
+            emit("article-error", message = "朗读内容不正确：${e.message}");return
+        }
+        val run=Session(epoch.incrementAndGet(),requestToken.take(64),segments,true)
+        current=run;stopTrack()
+        val speed=rate.coerceIn(0.7f,1.3f);val sid=speakerId.coerceIn(0,10)
+        synthWorker.execute { produce(run,speed,sid) }
+        playWorker.execute { consume(run) }
+        markerWorker.execute { dispatchMarkers(run) }
+    }
+
     // Append ahead of playback without creating a new session or AudioTrack.
     // Token validation prevents delayed JS messages from entering another book/voice.
     fun appendBatch(json: String, requestToken: String) {
@@ -140,20 +163,9 @@ class ArticleVoiceEngine(private val context: Context, private val onEvent: Even
         try {
             if (!active(run)) return
             diskCache.trim()
-            if (kokoro == null) {
-                emit("article-loading", run, message = "首次使用，正在加载 Kokoro 离线女声…")
-                KokoroModelGuard.gate.acquire()
-                holdsKokoroGate = true
-                try {
-                    kokoro = loadModel()
-                } catch (failure: Throwable) {
-                    holdsKokoroGate = false
-                    KokoroModelGuard.gate.release()
-                    throw failure
-                }
-                emit("article-ready", run)
-            }
-            val engine = kokoro ?: error("Kokoro 模型初始化失败")
+            // Cached playback starts immediately without allocating the native Kokoro model.
+            // The model is acquired lazily ONLY when an uncached sentence is met.
+            emit("article-ready",run)
             var index = 0
             while (active(run)) {
                 // Permit JS to supply the next chapter/batch before the current
@@ -173,6 +185,22 @@ class ArticleVoiceEngine(private val context: Context, private val onEvent: Even
                 val memory = audioCache.get(key)
                 val persisted = if (memory == null) diskCache.get(key) else null
                 val clip = memory ?: persisted ?: run {
+                    if(run.cacheOnly)error("当前句尚未缓存完成；后台生成继续进行，稍后可再播放（不会暂停缓存任务）")
+                    if(kokoro==null){
+                        emit("article-loading",run,message="正在加载 Kokoro，为未缓存句子补充朗读…")
+                        KokoroModelGuard.gate.acquire()
+                        holdsKokoroGate=true
+                        try {
+                            processLease=KokoroProcessGate.acquire(context,{active(run)},12_000L)
+                                ?: error("后台整书缓存正在使用Kokoro；可先暂停缓存，已缓存片段仍可直接播放")
+                            kokoro=loadModel()
+                        } catch(t:Throwable) {
+                            try{processLease?.close()}catch(_:Throwable){}
+                            processLease=null
+                            holdsKokoroGate=false;KokoroModelGuard.gate.release();throw t
+                        }
+                    }
+                    val engine=kokoro ?: error("Kokoro 模型初始化失败")
                     // sherpa-onnx JNI callback generation crashed on some Android devices;
                     // use the stable synchronous entry point, only on synthWorker.
                     val raw = engine.generate(seg.text, sid, speed).samples
@@ -200,6 +228,9 @@ class ArticleVoiceEngine(private val context: Context, private val onEvent: Even
             }
         } finally {
             run.synthesisDone = true
+            // Do not hold Kokoro RAM / the cross-process lock after the last batch.
+            // A new reading session can lazily load it again if needed.
+            if (run.ended || !active(run)) freeModelOnSynthWorker()
         }
     }
 
@@ -452,20 +483,26 @@ class ArticleVoiceEngine(private val context: Context, private val onEvent: Even
         current = null
         stopTrack()
     }
+    private fun freeModelOnSynthWorker() {
+        try { kokoro?.free() } catch (_: Throwable) {}
+        kokoro = null
+        try { processLease?.close() } catch (_: Throwable) {}
+        processLease = null
+        if (holdsKokoroGate) { holdsKokoroGate = false; KokoroModelGuard.gate.release() }
+    }
     fun releaseModel() {
         val before = current
         stop()
         if (before != null) emit("article-stopped", before)
         synthWorker.execute {
-            try { kokoro?.free() } catch (_: Throwable) {}
-            kokoro = null
-            if (holdsKokoroGate) { holdsKokoroGate = false; KokoroModelGuard.gate.release() }
+            freeModelOnSynthWorker()
             audioCache.evictAll() // Disk PCM persists for future reading sessions.
         }
     }
     fun close() {
         if (closed) return
         closed = true
+        KokoroModelGuard.unregisterReader(this)
         releaseModel()
         synthWorker.shutdown()
         playWorker.shutdown()

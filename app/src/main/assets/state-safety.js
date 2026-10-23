@@ -83,5 +83,12 @@ if(typeof window==='object'&&window?.addEventListener){
  window.addEventListener('pagehide',()=>{if(pending)flush().catch(()=>{})});
  document?.addEventListener?.('visibilitychange',()=>{if(document.hidden&&pending)flush().catch(()=>{})});
 }
-return {schedule,flush,latest,valid,checksum};
+async function clear(){
+ if(timer!==null){clearTimeout(timer);timer=null}
+ pending='';await writing.catch(()=>{});
+ const db=await database();try{await new Promise((resolve,reject)=>{const tx=db.transaction(STORE,'readwrite');tx.objectStore(STORE).clear();tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error)})}finally{db.close()}
+ lastChecksum='';lastSaved=0;
+ return true;
+}
+return {schedule,flush,latest,clear,valid,checksum};
 });

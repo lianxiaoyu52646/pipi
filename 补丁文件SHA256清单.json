@@ -1,0 +1,81 @@
+{
+  "version": "V5.12.15",
+  "base": "V5.12.14",
+  "files": [
+    {
+      "path": "README_V5.12.15_全模块一致性增强.md",
+      "sha256": "3e407311f2ddc8f9b53d4791e95d19bb10373164acfa27fe829f907af65f94dd",
+      "size": 4512
+    },
+    {
+      "path": "TEST_REPORT_V5.12.15.md",
+      "sha256": "7827e2d7423d8cd8b4078f7190880a7d5cdd773fd518764053c32ab630850f70",
+      "size": 2067
+    },
+    {
+      "path": "app/build.gradle",
+      "sha256": "66f0bf984efe609aa59531c9c21efa1f9373d5fd1258474ce3268bf341825da5",
+      "size": 8564
+    },
+    {
+      "path": "app/src/main/assets/app.js",
+      "sha256": "355f1d2987d8d72c89cb4d48da66f29ee1ef486ee25449628a2b08cc1fe552f1",
+      "size": 167380
+    },
+    {
+      "path": "app/src/main/assets/backup.html",
+      "sha256": "324a7e6b9042218b544409a11a21af626cac219069f137d0e21257106384d5a2",
+      "size": 13293
+    },
+    {
+      "path": "app/src/main/assets/bookmark-merge.js",
+      "sha256": "96f35f9b5cad119311ef760424520e6b6bd481f4ad84066d6c77c5797943b2aa",
+      "size": 1033
+    },
+    {
+      "path": "app/src/main/assets/dictionary.html",
+      "sha256": "b187013eaacdef328a2f19a29563820aa8b3c842644c9836bebca222eacb24f7",
+      "size": 2823
+    },
+    {
+      "path": "app/src/main/assets/full-dict.js",
+      "sha256": "d680fd69de4e4891bbf52b523ffe270e89448d3c62ab5924d70516ee1b5c5769",
+      "size": 8847
+    },
+    {
+      "path": "app/src/main/assets/index.html",
+      "sha256": "67976072c41f04a366449589402509fdee1835225e0036a5e3f8ef3ed1c1f553",
+      "size": 6295
+    },
+    {
+      "path": "app/src/main/assets/originals-reader.html",
+      "sha256": "b5f222149c3685251311cf2d64eace425e8a3a1e2101ec21b6ce880b6dafc79b",
+      "size": 9478
+    },
+    {
+      "path": "app/src/main/assets/originals-reader.js",
+      "sha256": "4c55620eda4652d5468ec5a19115f1be83e5a183d7bc6a558b99bbb12fc639db",
+      "size": 56259
+    },
+    {
+      "path": "app/src/main/assets/speaking-archive.js",
+      "sha256": "c180f56bb5d39b913c2e226461762bcfa712725ba015502a140b6f2781b52b8a",
+      "size": 1357
+    },
+    {
+      "path": "app/src/main/java/com/sprint7/offline/MainActivity.java",
+      "sha256": "69ea9bd6e27a464699bf1f24b468ee423618927b4b96ee1e64301c98730cf5a4",
+      "size": 18517
+    },
+    {
+      "path": "app/src/main/java/com/sprint7/offline/StudyStateStore.java",
+      "sha256": "9f73f2a08ab94ae83a0b11f7baa80dc33c7f7e426eee9c5a199c2cc5000bb1a7",
+      "size": 13573
+    },
+    {
+      "path": "tests/test_v51215_consistency.js",
+      "sha256": "6c49c3d17e6dd2bfd99555db968011482a48e75555d2054d9586c6e0a3abe95b",
+      "size": 3896
+    }
+  ]
+}

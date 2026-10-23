@@ -33,6 +33,7 @@ public class MainActivity extends Activity {
     private byte[] pendingBytes;
     private String pendingFilename = "Pipi-backup.json";
     private OfflineVoiceEngine voice;
+    private StudyStateStore studyStore;
     private ArticleVoiceEngine articleVoice;
     private PermissionRequest pendingPermission;
     private final java.util.concurrent.atomic.AtomicBoolean resumeArticleAfterWord = new java.util.concurrent.atomic.AtomicBoolean(false);
@@ -41,6 +42,7 @@ public class MainActivity extends Activity {
         super.onCreate(state);
         getWindow().setStatusBarColor(0xff6259e9);
         getWindow().setNavigationBarColor(0xfff7f7fc);
+        studyStore = new StudyStateStore(getApplicationContext());
         web = new WebView(this);
         setContentView(web);
         WebSettings ws = web.getSettings();
@@ -113,18 +115,33 @@ public class MainActivity extends Activity {
             }
             if ("error".equals(code)) Toast.makeText(this, message, Toast.LENGTH_LONG).show();
         }));
-        articleVoice = new ArticleVoiceEngine(getApplicationContext(), event -> runOnUiThread(() -> {
+        articleVoice = ArticlePlaybackService.reconnectEngine(getApplicationContext(), event -> runOnUiThread(() -> {
             if (web != null) web.evaluateJavascript(
                 "window.dispatchEvent(new CustomEvent('pipi-article-tts',{detail:" + event.toString() + "}))", null);
         }));
         web.loadUrl(BASE+"index.html");
     }
+    private void beginArticleForeground(){
+        try{startForegroundService(new Intent(this,ArticlePlaybackService.class).setAction(ArticlePlaybackService.ACTION_PLAY));}
+        catch(Exception e){android.util.Log.e("PipiArticle","Cannot start playback notification",e);}
+    }
+    private void stopArticleForeground(){
+        try{startService(new Intent(this,ArticlePlaybackService.class).setAction(ArticlePlaybackService.ACTION_STOP));}
+        catch(Exception e){android.util.Log.w("PipiArticle","Unable to stop playback service",e);}
+    }
     public class Bridge {
+        @JavascriptInterface public boolean saveLearningStateIfRevision(String raw,long expected) {return studyStore.writeIfRevision(raw,expected);}
         @JavascriptInterface public boolean saveLearningStateToSQLite(String raw) {
-            return new StudyStateStore(getApplicationContext()).write(raw);
+            return studyStore.write(raw);
+        }
+        @JavascriptInterface public boolean saveReaderProgressToSQLite(String raw){return studyStore.writeReaderProgress(raw);}
+        @JavascriptInterface public String getReaderProgressFromSQLite(){return studyStore.readReaderProgress();}
+        @JavascriptInterface public boolean clearReaderProgressSQLite(){return studyStore.clearReaderProgress();}
+        @JavascriptInterface public boolean clearLearningStateSQLite() {
+            return studyStore.clear();
         }
         @JavascriptInterface public String getLearningStateFromSQLite() {
-            return new StudyStateStore(getApplicationContext()).read();
+            return studyStore.read();
         }
         @JavascriptInterface public String getLibraryVoiceCacheStatus() {
             return LibraryVoiceCacheService.Companion.status(getApplicationContext());
@@ -156,20 +173,18 @@ public class MainActivity extends Activity {
             // Caching is the user's explicit long-running choice. Reading must NEVER
             // silently send ACTION_PAUSE (old code did so on every narration request).
             // Two Kokoro sessions can exhaust RAM: ask the user to pause explicitly.
-            if (LibraryVoiceCacheService.isActive() || LibraryVoiceCacheService.shouldResume(getApplicationContext())) {
-                org.json.JSONObject error = new org.json.JSONObject();
-                try {
-                    error.put("code", "article-error");
-                    error.put("token", requestToken == null ? "" : requestToken);
-                    error.put("message", "后台语音缓存正在持续运行；如需实时朗读，请先到缓存页面手动点击暂停。缓存不会被自动暂停。");
-                } catch (org.json.JSONException ignored) { }
-                runOnUiThread(() -> {
-                    if(web!=null)web.evaluateJavascript("window.dispatchEvent(new CustomEvent('pipi-article-tts',{detail:" + error.toString() + "}))", null);
-                });
+            final boolean cacheRunning=LibraryVoiceCacheService.isActive() ||
+                LibraryVoiceCacheService.shouldResume(getApplicationContext());
+            if(cacheRunning){
+                // Reader can play verified PCM without acquiring another Kokoro model.
+                // An uncached segment shows a clear warning; the background task is NEVER paused.
+                if(articleVoice!=null)articleVoice.speakCachedBatch(itemsJson,speed,speakerId,requestToken);
+                beginArticleForeground();
                 return;
             }
             if (voice != null) voice.releaseModel();
             if (articleVoice != null) articleVoice.speakBatch(itemsJson, speed, speakerId, requestToken);
+            beginArticleForeground();
         }
         @JavascriptInterface public void appendArticle(String itemsJson, String requestToken) {
             if (articleVoice != null) articleVoice.appendBatch(itemsJson, requestToken);
@@ -179,7 +194,7 @@ public class MainActivity extends Activity {
         }
         @JavascriptInterface public void pauseArticle(){ if (articleVoice != null) articleVoice.pause(); }
         @JavascriptInterface public void resumeArticle(){ if (articleVoice != null) articleVoice.resume(); }
-        @JavascriptInterface public void stopArticle(){ resumeArticleAfterWord.set(false); if (articleVoice != null) articleVoice.stop(); }
+        @JavascriptInterface public void stopArticle(){ resumeArticleAfterWord.set(false); if (articleVoice != null) articleVoice.stop(); stopArticleForeground(); }
 
         @JavascriptInterface public void speak(String text){ speakWithRate(text, 1f); }
         @JavascriptInterface public void speakWithRate(String text, float speed) {
@@ -260,13 +275,18 @@ public class MainActivity extends Activity {
     @Override protected void onPause() {
         resumeArticleAfterWord.set(false);
         if (voice != null) voice.stop();
-        if (articleVoice != null) articleVoice.pause();
+        // Locking the screen pauses the Activity, not the foreground audiobook.
+        // User actions still pause/stop through the playback controls.
         super.onPause();
     }
     @Override protected void onDestroy(){
         if (voice != null) voice.close();
-        if (articleVoice != null) articleVoice.close();
+        if (articleVoice != null) {
+            if (articleVoice.isReading()) ArticlePlaybackService.detachCallback(articleVoice);
+            else articleVoice.close();
+        }
         if (web != null) web.destroy();
+        if (studyStore != null) {studyStore.close();studyStore=null;}
         super.onDestroy();
     }
 }

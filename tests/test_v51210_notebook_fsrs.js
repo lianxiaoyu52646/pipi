@@ -1,0 +1,54 @@
+'use strict';
+const assert=require('node:assert/strict');
+const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+const root=path.join(__dirname,'../app/src/main/assets');
+const source=fs.readFileSync(path.join(root,'app.js'),'utf8');
+const reader=fs.readFileSync(path.join(root,'originals-reader.js'),'utf8');
+const fsrs=require(path.join(root,'fsrs.js'));
+const core=require(path.join(root,'v5-core.js'));const reviewLogic=require(path.join(root,'review-engine.js'));
+const cut=(s,start,end)=>{const a=s.indexOf(start),b=s.indexOf(end,a);assert(a>=0&&b>a,`missing function slice: ${start}`);return s.slice(a,b)};
+// Exercise the real application implementations rather than shadow copies.
+const state={vocab:{'lex:apple':{fsrsVersion:6,stability:18.7,difficulty:5,knownCount:7,dueAt:'2026-11-02T12:00:00.000Z',lastReviewed:'2026-10-20T12:00:00.000Z'}},mistakes:{'word:lex:apple:0':{kind:'readingword',unit:'lex:apple',status:'mastered',success:7,masteredAt:'2026-10-20',first:'2026-09-01'}}};
+let saves=0;
+const context={state,console,JSON,Date,Number,Set,Object,Math,PipiReviewLogic:reviewLogic,SprintFSRS:fsrs,save:()=>{saves++;return true},dateKey:()=> '2026-10-23'};
+vm.createContext(context);
+vm.runInContext([cut(source,'const WORD_KINDS=', 'function dueLabel('),cut(source,'function reviewMemory(', 'const defaultState='),cut(source,'function healMistake(', 'function activeMistakes('),cut(source,'function migrateNotebookMembership(){','\nmigrateNotebookMembership();')].join('\n'),context);
+const dueBefore=state.vocab['lex:apple'].dueAt,stabilityBefore=state.vocab['lex:apple'].stability;
+vm.runInContext('migrateNotebookMembership()',context);
+assert.equal(state.mistakes['word:lex:apple:0'].status,'pending');
+assert.equal(state.vocab['lex:apple'].dueAt,dueBefore,'migration must not change next due date');
+assert.equal(state.vocab['lex:apple'].stability,stabilityBefore,'migration must not reset memory stability');
+assert.equal(state.notebookMembershipVersion,2);
+reviewLogic.normalize(state);
+vm.runInContext('migrateNotebookMembership()',context);
+assert.equal(saves,1,'migration must be idempotent');
+assert.equal(vm.runInContext('isNotebookWord(state.mistakes["word:lex:apple:0"])',context),true);
+for(let n=0;n<16;n++)vm.runInContext('healMistake("readingword","lex:apple",0)',context);
+assert.equal(state.mistakes['word:lex:apple:0'].status,'pending','even 23 correct reviews remain in notebook');
+assert.equal(state.vocab['lex:apple'].knownCount,23);
+assert.equal(state.vocab['lex:apple'].fsrsVersion,6);
+assert.notEqual(state.vocab['lex:apple'].dueAt,dueBefore,'FSRS should update the due date when reviewed');
+assert.equal(core.dueIds(state,Date.parse('2050-01-01T00:00:00Z')).includes('lex:apple'),true,'retained notebook cards are still due eventually');
+// Render the three real review tabs after more than twenty successful reviews.
+const reviewCtx={state,PipiReviewLogic:reviewLogic,ui:{reviewFilterV5:'unknown',reviewQueryV5:''},PipiV5:core,WORD_KINDS:new Set(['vocab','sound','readingword','dictationword']),isNotebookWord:m=>!!m&&['vocab','sound','readingword','dictationword'].includes(m.kind)&&m.status!=='removed',wordById:id=>({word:'apple',zh:'苹果'}),esc:x=>String(x),dueLabel:()=> '下次复习',Date,Set,Object,String};
+vm.createContext(reviewCtx);vm.runInContext(cut(source,'const REVIEW_PAGE_SIZE=','\nfunction reviewOne('),reviewCtx);
+for(const tab of ['unknown','all']){reviewCtx.ui.reviewFilterV5=tab;assert.match(vm.runInContext('renderReview()',reviewCtx),/apple/,'word must stay on '+tab+' tab regardless of success count')}
+reviewCtx.ui.reviewFilterV5='due';state.vocab['lex:apple'].dueAt='2020-01-01T00:00:00Z';assert.match(vm.runInContext('renderReview()',reviewCtx),/apple/,'due tab must still show the word when FSRS schedules it');
+const countBefore=Object.keys(state.vocab).length;
+vm.runInContext('healMistake("vocab","lex:brandnew",0)',context);
+assert.equal(Object.keys(state.vocab).length,countBefore,'correct answer for uncollected word must not create an FSRS card');
+// The in-reader review path also schedules without a fixed graduation threshold.
+const m={kind:'readingword',unit:'lex:apple',status:'mastered',success:7,first:'2026-10-01'};
+const rState={vocab:{'lex:apple':{knownCount:7,fsrsVersion:6,stability:12,difficulty:6,dueAt:dueBefore,lastReviewed:'2026-10-18T12:00:00Z'}},mistakes:{'word:lex:apple:0':m}};
+const overlay={hidden:false};let readerSaves=0;
+const rCtx={ctx:{word:'apple'},getMain:()=>rState,putMain:()=>{readerSaves++;return true},$:()=>overlay,toast:()=>{},renderChapter:()=>{},now:()=>new Date().toISOString(),window:{SprintFSRS:fsrs},Number,Date};
+vm.createContext(rCtx);
+vm.runInContext(cut(reader,'function markKnown(){','function toast('),rCtx);
+for(let n=0;n<10;n++)vm.runInContext('markKnown()',rCtx);
+assert.equal(m.status,'pending','reading review never automatically archives at seven or more Good answers');
+assert.equal(rState.vocab['lex:apple'].knownCount,17);
+assert.equal(readerSaves,10);
+assert(!/n\s*>=\s*7/.test(reader),'reader has no seven-good count threshold');
+assert(!source.includes('KNOWN_TO_ARCHIVE'),'main app has no seven-good threshold');
+assert.match(reader,/item\.status!=='removed'/,'reader highlights previously mastered legacy words');
+console.log('PASS V5.12.10: old mastered words restored; no seven-good cutoff; FSRS due schedule continues; uncollected correct words not enrolled');

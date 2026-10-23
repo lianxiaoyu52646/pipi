@@ -2,7 +2,7 @@
 <style>*{box-sizing:border-box}body{font-family:system-ui,-apple-system,'Noto Sans SC',sans-serif;background:#f7f7fc;color:#1f2742;margin:0;padding:20px}.wrap{max-width:520px;margin:20px auto;background:white;border-radius:22px;padding:25px;box-shadow:0 12px 40px #232b6015}h1{font-size:24px}.hint{font-size:13px;color:#606c84;line-height:1.75}.btn{border:0;border-radius:13px;background:#6857df;color:white;font-size:15px;padding:15px;display:block;width:100%;margin:14px 0;cursor:pointer}.second{background:#e8e6fb;color:#4537a6}.danger{color:#a72727}a{color:#6757df;text-decoration:none}.status{font-size:13px;color:#356d50;min-height:32px}</style><script src="./pipi-web-navigation.js"></script></head><body><div class="wrap"><a href="./index.html?nav=me" data-pipi-return="true">← 返回皮皮</a><h1>学习记录备份</h1><p class="hint">离线 App 内的数据独立保存在手机。卸载 App 或清除应用数据会删除学习记录。请定期导出到手机“文件”。新版会额外保留最多5个短期自动快照，但快照无法替代你手动导出的文件备份。备份包括本机学习进度、FSRS、原著书签，以及自行导入并缓存在本机的考试词书（若存在）。不包含 APK 自带的小说原文和完整 ECDICT 资源。</p>
 <button class="btn" id="backup">导出学习记录 JSON</button><button class="btn second" id="rawBackup">保存原始记录（异常数据应急）</button><button class="btn second" id="recoverAuto">尝试从自动快照恢复</button><button class="btn second" id="restore">从 JSON 恢复学习记录</button><input id="file" type="file" accept=".json,application/json" hidden><p class="hint danger">恢复前请先导出当前记录。恢复会覆盖备份里包含的数据项；若失败，将尝试自动回滚。原电脑浏览器和手机 App 的数据不会自动同步。</p><p id="status" class="status"></p></div>
 <script src="./wordbooks.js"></script><script src="./backup-core.js"></script>
-<script src="./state-safety.js"></script>
+<script src="./state-safety.js"></script><script src="./bookmark-merge.js"></script>
 <script>
 (function(){'use strict';
 const msg=x=>document.getElementById('status').textContent=x;
@@ -20,9 +20,57 @@ async function writeCustomBooks(rows){if(!rows.length)return;const db=await getD
 async function deleteCustomBooks(keys){if(!keys.length)return;const db=await getDB();if(!db)return;
  return new Promise((resolve,reject)=>{const tx=db.transaction('books','readwrite'),store=tx.objectStore('books');for(const key of keys)store.delete(key);
  tx.oncomplete=()=>{db.close();resolve()};tx.onerror=()=>{db.close();reject(tx.error)}})}
+// V5.12.14: Prefer newest verified SQLite record; an older WebView mirror is not a backup.
+function validMain(raw){try{const o=JSON.parse(raw);return o?.settingsVersion===1&&o.vocab&&typeof o.vocab==='object'&&o.dayTasks&&typeof o.dayTasks==='object'}catch(_){return false}}
+function mainRev(raw){try{return Number(JSON.parse(raw)._pipiRevision)||0}catch(_){return -1}}
+function capturedCurrent(){
+ const data=PipiBackup.capture(localStorage),native=window.SprintAndroid;
+ const sql=native?.getLearningStateFromSQLite?.()||'';
+ if(validMain(sql)&&(!validMain(data[PipiBackup.MAIN])||mainRev(sql)>mainRev(data[PipiBackup.MAIN])))data[PipiBackup.MAIN]=sql;
+ const reader=native?.getReaderProgressFromSQLite?.()||'';
+ if(reader){try{const local=JSON.parse(data.sprint7_originals_progress||'{}'),remote=JSON.parse(reader);data.sprint7_originals_progress=JSON.stringify(PipiBookmarkMerge.merge(local,remote))}catch(_){if(!data.sprint7_originals_progress)data.sprint7_originals_progress=reader}}
+ return data;
+}
+// Compare structural content rather than key order (JSONObject may reorder fields).
+function canonical(x){if(Array.isArray(x))return '['+x.map(canonical).join(',')+']';if(x&&typeof x==='object')return '{'+Object.keys(x).sort().map(k=>JSON.stringify(k)+':'+canonical(x[k])).join(',')+'}';return JSON.stringify(x)}
+function sameJson(a,b){try{return canonical(JSON.parse(a))===canonical(JSON.parse(b))}catch(_){return false}}
+function verifiedNativeWrite(key,value){const n=window.SprintAndroid;if(!n)return;
+ const isMain=key===PipiBackup.MAIN;
+ const write=isMain?n.saveLearningStateToSQLite:n.saveReaderProgressToSQLite;
+ const read=isMain?n.getLearningStateFromSQLite:n.getReaderProgressFromSQLite;
+ if(typeof write!=='function'||typeof read!=='function')throw Error('原生SQLite读写接口不完整');
+ if(!write.call(n,value)||!sameJson(read.call(n),value))throw Error('SQLite保存后回读校验失败：'+key);
+}
+function safeRestoreStorage(source){
+ const values={...source};
+ const backup=PipiBackup.capture(localStorage),beforeNative=window.SprintAndroid?.getLearningStateFromSQLite?.()||'',beforeReader=window.SprintAndroid?.getReaderProgressFromSQLite?.()||'';
+ // A restored older backup becomes a NEW revision, so restart recovery will not
+ // mistakenly prefer the discarded newer snapshot instead of user's selection.
+ const restored=JSON.parse(values[PipiBackup.MAIN]);
+ restored._pipiRevision=Math.max(mainRev(values[PipiBackup.MAIN]),mainRev(beforeNative),mainRev(backup[PipiBackup.MAIN]),0)+1;
+ values[PipiBackup.MAIN]=JSON.stringify(restored);
+ // First durable commit; then WebView. Never display success until both succeed.
+ try{
+  verifiedNativeWrite(PipiBackup.MAIN,values[PipiBackup.MAIN]);
+  if('sprint7_originals_progress' in values)verifiedNativeWrite('sprint7_originals_progress',values.sprint7_originals_progress);
+  PipiBackup.applyStorage(localStorage,values);
+  if(!sameJson(localStorage.getItem(PipiBackup.MAIN),values[PipiBackup.MAIN]))throw Error('WebView恢复回读校验失败');
+ }catch(e){
+  let rollbackErrors=[];
+  try{if(beforeNative&&validMain(beforeNative)){
+     const old=JSON.parse(beforeNative);old._pipiRevision=restored._pipiRevision+1;
+     verifiedNativeWrite(PipiBackup.MAIN,JSON.stringify(old));
+   }else if(window.SprintAndroid?.clearLearningStateSQLite&&!window.SprintAndroid.clearLearningStateSQLite())throw Error('清空新写入状态失败');
+  }catch(x){rollbackErrors.push('SQLite:'+x.message)}
+  try{if(beforeReader)verifiedNativeWrite('sprint7_originals_progress',beforeReader);else if('sprint7_originals_progress' in values && window.SprintAndroid?.clearReaderProgressSQLite && !window.SprintAndroid.clearReaderProgressSQLite())throw Error('删除新书签失败')}catch(x){rollbackErrors.push('书签:'+x.message)}
+  try{const affected=Object.keys(values);for(const key of affected){const old=backup[key];if(old===undefined)localStorage.removeItem(key);else localStorage.setItem(key,old)}}catch(x){rollbackErrors.push('WebView:'+x.message)}
+  if(rollbackErrors.length)throw Error('恢复失败且回滚不完整（'+rollbackErrors.join('；')+'），请保留旧备份并不要继续操作：'+e.message);
+  throw Error('恢复失败，已回滚原记录：'+e.message);
+ }
+}
 function save(name,text){if(window.SprintAndroid&&window.SprintAndroid.saveFile){const b=new TextEncoder().encode(text);let cs='';for(let i=0;i<b.length;i+=32768)cs+=String.fromCharCode(...b.subarray(i,i+32768));window.SprintAndroid.saveFile(name,'application/json',btoa(cs));return}const blob=new Blob([text],{type:'application/json'}),a=document.createElement('a'),u=URL.createObjectURL(blob);a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}
 document.getElementById('backup').onclick=async()=>{busy(true);msg('正在收集离线学习记录…');try{
- const data={format:'pipi-offline-backup-v2',date:new Date().toISOString(),storage:PipiBackup.capture(localStorage),bookCache:await readCustomBooks()};if(!data.storage[PipiBackup.MAIN])throw Error('暂无学习数据');
+ const data={format:'pipi-offline-backup-v2',date:new Date().toISOString(),storage:capturedCurrent(),bookCache:await readCustomBooks()};if(!data.storage[PipiBackup.MAIN])throw Error('暂无学习数据');
  PipiBackup.parse(data);const content=JSON.stringify(data),size=new Blob([content]).size;
  if(size>14_000_000)throw Error('备份超过安卓导出上限（14MB），请联系开发者协助分包，切勿卸载旧版');
  save('皮皮-V5-学习备份-'+new Date().toISOString().slice(0,10)+'.json',content);
@@ -44,8 +92,7 @@ document.getElementById('recoverAuto').onclick=async()=>{busy(true);msg('正在�
  const row=await PipiStateSafety.latest();if(!row){msg('没有有效自动快照；请使用以前导出的 JSON 文件恢复');return}
  const recovery=PipiBackup.parse({format:'pipi-offline-backup-v2',storage:row.storage&&row.storage[PipiBackup.MAIN]===row.raw?row.storage:{[PipiBackup.MAIN]:row.raw},bookCache:[]});
  if(!confirm('发现 '+new Date(row.at).toLocaleString()+' 的学习记录自动快照。恢复将覆盖快照中的学习状态、阅读书签和偏好（若有）；本机导入词书不在快照内。确定恢复？'))return;
- PipiBackup.applyStorage(localStorage,recovery.storage);
- if(window.SprintAndroid?.saveLearningStateToSQLite)window.SprintAndroid.saveLearningStateToSQLite(localStorage.getItem(PipiBackup.MAIN)||'');
+ safeRestoreStorage(recovery.storage);
  msg('已从自动快照恢复。正在返回首页。');setTimeout(()=>location.href='./index.html',1000);
  }catch(e){msg('恢复自动快照失败：'+e.message)}finally{busy(false)}};
 document.getElementById('restore').onclick=()=>document.getElementById('file').click();
@@ -57,8 +104,7 @@ document.getElementById('file').onchange=async e=>{const f=e.target.files?.[0];i
  const originalBooks=await readCustomBooks(),originalKeys=new Set(originalBooks.map(x=>x.key));
  // First validate and persist IndexedDB in one transaction; then commit localStorage with rollback.
  await writeCustomBooks(data.bookCache);
- try{PipiBackup.applyStorage(localStorage,data.storage);
- if(window.SprintAndroid?.saveLearningStateToSQLite)window.SprintAndroid.saveLearningStateToSQLite(localStorage.getItem(PipiBackup.MAIN)||'')}catch(e){
+ try{safeRestoreStorage(data.storage)}catch(e){
    // Restore original custom entries and remove newly created entries.
    await writeCustomBooks(originalBooks);
    await deleteCustomBooks(data.bookCache.map(x=>x.key).filter(x=>!originalKeys.has(x)));

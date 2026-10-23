@@ -25,55 +25,65 @@ const resourceLinks=[
 ];
 const KEY='sprint7_complete_v1';
 const WORD_KINDS=new Set(['vocab','sound','readingword','dictationword']);
-const KNOWN_TO_ARCHIVE=7; // achievement badge only; FSRS due reviews remain active
+// Notebook membership and FSRS review scheduling are independent; no fixed graduation count.
 const errorKey=(kind,unit,q=0)=>WORD_KINDS.has(kind)?`word:${unit}:0`:`${kind}:${unit}:${q}`;
+// Legacy `mastered` is a historical seven-correct-count label, NOT a user removal.
+// Existing word entries stay in the notebook until a deliberate removal is supported.
+const isNotebookWord=m=>PipiReviewLogic.enrolled(m);
 function dueLabel(item){const value=item?.dueAt||item?.due;if(!value)return '待安排';const d=new Date(value);if(!Number.isFinite(d.getTime()))return String(value).slice(0,10);const mins=Math.ceil((d.getTime()-Date.now())/60000);if(mins<=0)return '现在到期';if(mins<60)return mins+'分钟后';if(mins<1440)return Math.ceil(mins/60)+'小时后';return (d.getMonth()+1)+'月'+d.getDate()+'日';}
 function isDue(item){if(!item)return true;if(item.dueAt)return new Date(item.dueAt).getTime()<=Date.now();return !item.due||item.due<=dateKey();}
 function reviewMemory(id,known){const old=state.vocab[id]||{};const next=SprintFSRS.schedule(old,known);const knownCount=known?(Number(old.knownCount)||0)+1:(Number(old.knownCount)||0);state.vocab[id]={...old,...next,knownCount,knownTotal:(Number(old.knownTotal)||0)+(known?1:0),reps:known?(Number(old.reps)||0)+1:0,lapses:(Number(old.lapses)||0)+(known?0:1),last:dateKey(),due:dateKey(new Date(next.dueAt))};return state.vocab[id]};
 const defaultState=()=>({created:dateKey(),goal:7,dailyMinutes:120,exam:'academic',start:dateKey(),testResults:[],quiz:null,vocab:{},custom:[],dayReviews:{},dayTasks:{},listenHistory:[],dictationHistory:[],readHistory:[],speakingHistory:[],writingDrafts:{},writingHistory:[],mockHistory:[],activity:{},soundHistory:[],stageHistory:[],stageTest:null,mistakes:{},mistakeEvents:[],readerWords:{},readerProgress:{},readerSettings:{showChinese:true,fontSize:18},wordLevel:'adaptive',wordTopic:'all',wordGoal:50,wordBook:'ielts',wordOrder:'alpha',bookPaths:{},bookPathDaily:{},bookExamHistory:[],wordStudyModes:{},wordDisplayModes:{},wordListProgress:{},wordListDaily:{},lessonSearch:'',activityMinutes:{},settingsVersion:1});
 function getState(){
- let raw=localStorage.getItem(KEY);
- // Native SQLite is an independent, checksum-verified recovery copy. Migration
- // is additive: never silently overwrite an existing valid WebView record.
+ const webRaw=localStorage.getItem(KEY);
  let nativeCopy='';
- try{nativeCopy=window.SprintAndroid?.getLearningStateFromSQLite?.()||''}catch(e){console.warn('SQLite recovery read unavailable',e)}
- if(raw===null){
-   if(window.PipiStateSafety?.valid(nativeCopy)){
-     try{localStorage.setItem(KEY,nativeCopy);raw=nativeCopy}
-     catch(e){console.warn('SQLite rescue succeeded but WebView mirror write failed',e);raw=nativeCopy}
-   }else return defaultState();
+ try{nativeCopy=window.SprintAndroid?.getLearningStateFromSQLite?.()||''}catch(e){console.warn('SQLite 读取不可用',e)}
+ const valid=x=>!!window.PipiStateSafety?.valid(x);
+ const revision=x=>{try{return Math.max(0,Number(JSON.parse(x)._pipiRevision)||0)}catch(e){return 0}};
+ // A SQLite commit may precede a WebView crash: the higher verified revision wins.
+ // Never replace a genuinely newer local restore with an older SQLite backup.
+ let raw=webRaw;
+ if(valid(nativeCopy)&&(!valid(webRaw)||revision(nativeCopy)>revision(webRaw))){
+  raw=nativeCopy;
+  try{localStorage.setItem(KEY,raw)}catch(e){console.warn('SQLite恢复后WebView镜像写入失败',e)}
  }
- if(!window.PipiStateSafety?.valid(raw)&&window.PipiStateSafety?.valid(nativeCopy)){
-   // The SQLite copy can rescue a corrupted WebView record, but only if the
-   // user has not just restored a newer backup; expose via recovery workflow.
-   const recover=document.getElementById('content');
-   if(recover)recover.innerHTML='<section class="pipi-recovery-lock"><h1>检测到可恢复的SQLite学习记录</h1><p>主记录异常，但安全副本存在。请先通过工具导出备份，再选择恢复，避免误覆盖新数据。</p><a href="./backup.html">打开备份恢复</a></section>';
- }
+ if(raw===null)return defaultState();
  try{
-  if(!window.PipiStateSafety?.valid(raw))throw Error('学习记录结构或校验不正确');
+  if(!valid(raw))throw Error('学习记录结构不正确');
   return {...defaultState(),...JSON.parse(raw)};
  }catch(e){
-  // Never treat a damaged/older existing save as a new install. The old code
-  // silently returned an empty state and the next save erased the only copy.
   const area=document.getElementById('content');
-  if(area)area.innerHTML='<section class="pipi-recovery-lock"><div class="pipi-recovery-symbol">!</div><h1>学习记录需要恢复</h1><p>检测到手机上的学习记录无法安全读取。为防止清空原有进度，皮皮已暂停写入。请进入数据备份页，先导出可恢复的数据，再尝试自动快照或 JSON 备份恢复。</p><a class="pipi-recovery-action" href="./backup.html">进入数据备份与恢复</a><p class="pipi-recovery-warning">不要卸载 App、不要清除数据；重新安装无法修复已损坏的存储。</p></section>';
-  throw Error('皮皮已保护异常的学习数据，写入已阻止：'+e.message);
+  if(area)area.innerHTML='<section class="pipi-recovery-lock"><h1>学习记录需要恢复</h1><p>检测到学习数据异常，已停止写入，请先备份，再从快照或 JSON 恢复。</p><a href="./backup.html">备份与恢复</a></section>';
+  throw Error('皮皮已保护异常的学习数据，禁止覆盖：'+e.message);
  }
 }
 let state=getState(); if(window.SprintSchools)window.SprintSchools.getActive=()=>state.wordBook;
 const ui={page:'today',training:'words',quizGuess:false,quizType:'vocab',lesson:0,dictationIndex:0,dictationResult:null,reading:0,speak:0,write:0,answers:{},readingAnswers:{},transcript:false,flip:false,flipOverride:null,listBook:null,listRows:[],listStart:-1,wordId:null,speechRate:1,dialog:null,recording:false,recordSeconds:0,audioUrl:null,recordBlob:null,recorder:null,recordParts:[],focusTimer:null,focusSeconds:0,sessionReviewed:0,bookQuiz:null,bookImportKey:'ielts',bookStudyOpen:false,readerBookId:null,readerChapter:0,readerSelection:null,reviewFilter:'pending',reviewQuery:'',freshWordIds:new Set(),wordPathContext:null};
 function save(urgent=false){try{
- const raw=JSON.stringify(state);
- localStorage.setItem(KEY,raw);
- if(localStorage.getItem(KEY)!==raw)throw Error('写入后校验失败');
- // Dual-write SQLite durability without deleting legacy data. A failed mirror
- // is surfaced, and the IndexedDB snapshot remains an independent fallback.
- if(window.SprintAndroid?.saveLearningStateToSQLite &&
-     !window.SprintAndroid.saveLearningStateToSQLite(raw))
-   console.warn('SQLite 学习数据镜像写入失败，localStorage与IndexedDB仍保留');
+ const before=Number(state._pipiRevision)||0;
+ state._pipiRevision=before+1;
+ const raw=JSON.stringify(state),native=window.SprintAndroid?.saveLearningStateToSQLite;
+ const guarded=window.SprintAndroid?.saveLearningStateIfRevision;
+ // On Android SQLite is committed FIRST and is the durable authoritative copy.
+ // WebView localStorage and IndexedDB remain synchronized for the standalone
+ // reader, JSON exports and older app compatibility.
+ if(guarded){if(!guarded.call(window.SprintAndroid,raw,before))throw Error('其他页面更新了SQLite，或保存失败；请重新打开页面刷新记录');}
+ else if(native && !native.call(window.SprintAndroid,raw))throw Error('SQLite 主数据库写入失败');
+ try{localStorage.setItem(KEY,raw);
+  if(localStorage.getItem(KEY)!==raw)throw Error('WebView 镜像写入校验失败');
+ }catch(e){if(!native)throw e;console.warn('WebView 镜像延迟，SQLite 已安全保存',e)}
  window.PipiStateSafety?.schedule(raw,urgent);
  return true;
- }catch(e){toast('记录保存失败，请进入工具页导出备份');console.error('皮皮保存失败',e);return false}}
+ }catch(e){state._pipiRevision=Math.max(0,(Number(state._pipiRevision)||1)-1);toast('学习数据保存失败，请先备份');console.error('皮皮保存失败',e);return false}}
+
+// Typed drafts are in-memory immediately and checkpointed after a quiet interval.
+// Page hide and navigation force a durable checkpoint; don't synchronously serialize
+// the entire FSRS state for every keystroke.
+let pipiDraftTimer=null,pipiDraftDirty=false;
+function flushWritingDraft(){if(pipiDraftTimer){clearTimeout(pipiDraftTimer);pipiDraftTimer=null;}if(!pipiDraftDirty)return true;pipiDraftDirty=false;if(!save(true)){pipiDraftDirty=true;return false;}return true;}
+function scheduleWritingDraft(){pipiDraftDirty=true;if(pipiDraftTimer)clearTimeout(pipiDraftTimer);pipiDraftTimer=setTimeout(flushWritingDraft,950);}
+window.addEventListener?.('pagehide',flushWritingDraft);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')flushWritingDraft()});
 function markActivity(task){const d=dateKey();state.activity[d]=(state.activity[d]||0)+1;if(task){state.dayTasks[d]=state.dayTasks[d]||{};state.dayTasks[d][task]=true}save()}
 function taskDone(k){return !!state.dayTasks[dateKey()]?.[k]}
 function currentPhase(){const d=Math.max(0,dayDelta(dateKey(),state.start));return d<14?0:d<56?1:d<126?2:3}
@@ -83,7 +93,7 @@ const legacyWordMap=new Map(words.map(w=>[w.id,w]));
 function activeBook(){return state.wordBook||'ielts'}
 function importedBookReady(){return activeBook()==='basic'||SprintBooks.stats(activeBook()).phase==='ready'}
 function allWords(){const book=activeBook();const list=book==='basic'?words:SprintBooks.get(book);const items=(list.length?list:words).concat(state.custom||[]);const known=new Set(items.map(w=>w.id));return items.concat(Object.values(state.readerWords||{}).filter(w=>!known.has(w.id)))}
-function wordById(id){return SprintBooks.lookup(id)||legacyWordMap.get(id)||(state.custom||[]).find(w=>w.id===id)||(state.readerWords||{})[id]}
+function wordById(id){return SprintBooks.lookup(id,activeBook())||legacyWordMap.get(id)||(state.custom||[]).find(w=>w.id===id)||(state.readerWords||{})[id]}
 function countDoneToday(){return ['words','listen','speak','read','write'].filter(taskDone).length}
 function totalActiveDays(){return Object.keys(state.activity).length}
 function streak(){let n=0;let d=dateKey();if(!state.activity[d])d=daysFrom(d,-1);while(state.activity[d]){n++;d=daysFrom(d,-1)}return n}
@@ -115,7 +125,7 @@ function render(resetScroll=false){const c=document.getElementById('content');le
  c.innerHTML=html+(ui.page==='train'?pipiUndoBar():'');
  const navs=[['today','home','今日'],['train','train','词书'],['library','book','阅读'],['review','refresh','复习'],['me','gear','工具']];
  document.getElementById('bottomNav').innerHTML=navs.map(([id,ic,label])=>`<button class="nav-item ${ui.page===id?'active':''}" data-page="${id}" aria-current="${ui.page===id?'page':'false'}"><span class="nav-icon">${icon(ic,22)}</span>${label}</button>`).join('');
- const goal=document.getElementById('topGoal');if(goal)goal.textContent='V'+(window.PipiBuildVersion||'5.12.8');renderDialog();const viewport=document.getElementById('viewport');const inWordList=ui.page==='train'&&ui.training==='words'&&ui.bookStudyOpen&&wordStudyMode()==='list';viewport.classList.toggle('pipi-word-scroll-active',inWordList);
+ const goal=document.getElementById('topGoal');if(goal)goal.textContent='V'+(window.PipiBuildVersion||'5.12.9');renderDialog();const viewport=document.getElementById('viewport');const inWordList=ui.page==='train'&&ui.training==='words'&&ui.bookStudyOpen&&wordStudyMode()==='list';viewport.classList.toggle('pipi-word-scroll-active',inWordList);
  const topbar=document.querySelector('.app-top'),brand=topbar?.querySelector('.brand');
  topbar?.classList.toggle('pipi-word-nav-active',inWordList);
  if(brand){brand.innerHTML=inWordList?`<button type="button" class="pipi-top-back" data-action="choose-wordbook" aria-label="切换词书">${icon('chevron',20)}</button><button type="button" class="pipi-top-bookname pipi-switch-book" data-action="switch-book" aria-label="选择词书">${esc(SprintBooks.BOOKS[activeBook()]?.short||'基础词库')} ▾</button>`:`<span class="brand-icon brand-avatar"><img src="./app-avatar.png" alt="皮皮头像"/></span>皮皮`}
@@ -129,11 +139,16 @@ function dailyAlloc(){
   let mins=out.map(w=>Math.round(state.dailyMinutes*w/100));mins[4]+=state.dailyMinutes-mins.reduce((a,b)=>a+b,0);return Object.fromEntries(['words','listen','speak','read','write'].map((k,i)=>[k,mins[i]]));
 }
 const phaseDefs=[['打好基础','第 1—14 天','完成词汇和听力诊断，练发音与句子识别'],['输入输出强化','第 15—56 天','以精听、词汇和每日口语输出为主'],['雅思题型突破','第 57—126 天','听说读写四科专项，按周记录官方模考'],['模拟与冲刺','第 127—180 天','计时模拟，错题归因，按短板调整计划']];
+function currentOriginalProgress(){
+ let local={};try{local=JSON.parse(localStorage.getItem('sprint7_originals_progress')||'{}')}catch(_){}
+ let native={};try{native=JSON.parse(window.SprintAndroid?.getReaderProgressFromSQLite?.()||'{}')}catch(_){}
+ return window.PipiBookmarkMerge?.merge?.(local,native)||{...local,...native};
+}
 function renderToday(){
  const now=dateKey(),v=PipiV5.ensure(state),book=activeBook(),meta=SprintBooks.BOOKS[book],cursor=wordListProgress(book).next;
  const bookName=meta?.short||'基础词库';const count=meta?(SprintBooks.stats(book).count||meta.expected):words.length;const next=Math.min(count,cursor)+1;
- const due=PipiV5.dueIds(state).length,availableBooks=window.PipiAssetStatus?.installedBooks||OriginalBooks.map(b=>b.id);
- let progress={};try{progress=JSON.parse(localStorage.getItem('sprint7_originals_progress')||'{}')}catch(e){}
+ const due=PipiReviewLogic.dueIds(state).length,availableBooks=window.PipiAssetStatus?.installedBooks||OriginalBooks.map(b=>b.id);
+ const progress=currentOriginalProgress();
  const recent=PipiV5.lastReader(progress,OriginalBooks.filter(b=>availableBooks.includes(b.id)));
  const dr=state.dayReviews?.[now]||{};const dayEvents=v.events.filter(x=>(x.localDate||dateKey(new Date(x.at)))===now);
  return `<section class="v5-hero"><div class="v5-eyebrow">PIPI LEARNING · ${now}</div><h1>今天，也有新的收获。</h1><p>背单词 · 读原著 · 随时接着学</p></section>
@@ -158,14 +173,14 @@ ${sound?renderTestResultCard(sound):''}
 function renderTestResultCard(r){return `<div class="card"><div class="row between"><b class="small">${r.type==='vocab'?'词义识别':'听词辨义'} · ${esc(r.summary)}</b><span class="micro">${fmtDate(r.date)}</span></div><div class="sp8"></div><div class="band-list">${['A1','A2','B1','B2','C1'].map(l=>{const s=r.byLevel[l]||{correct:0,total:0};return `<div class="band-row"><b>${l}</b>${mkProgress(s.total?100*s.correct/s.total:0)}<span>${s.correct}/${s.total}</span></div>`}).join('')}</div><p class="note" style="margin-bottom:0">得分：${r.correct}/${r.total}；“猜的”正确答案在判断层级时按半权重处理。</p></div>`}
 function renderQuiz(){const q=state.quiz;const word=wordById(q.ids[q.index]);if(!q.options)q.options={};if(!q.options[q.index]){q.options[q.index]=mkOptions(word);save()}const opts=q.options[q.index];let curWord=q.type==='vocab'?`<h2 class="qword">${esc(word.word)}</h2><p class="qprompt">选择最贴近的中文意思</p>`:`<div style="text-align:center;margin:29px 0 20px"><button class="btn soft" data-action="quiz-say" style="height:72px;width:72px;border-radius:24px;padding:0">${icon('volume',32)}</button><h2 style="font-size:20px;margin:16px 0 4px">先听发音，再作答</h2><p class="qprompt" style="margin:0">请勿先看单词拼写 · 可以重复播放</p></div>`;return `<div class="row between"><button class="textbtn" data-action="exit-quiz">← 退出测试</button><span class="lesson-badge">${q.type==='vocab'?'词义识别':'声音识别'}</span></div><div class="questions-head"><div class="progress-meta"><span>QUESTION ${q.index+1} / ${q.ids.length}</span><span>${Math.round(q.index/q.ids.length*100)}%</span></div>${mkProgress(q.index/q.ids.length*100)}</div><div class="card" style="margin-top:20px;padding:25px 17px 18px">${curWord}${opts.map((opt,i)=>`<button class="select-option" data-quiz-answer="${i}"><span>${String.fromCharCode(65+i)}.　${esc(opt)}</span>${icon('chevron',16)}</button>`).join('')}<label class="guess-switch"><input type="checkbox" id="guessBox" ${ui.quizGuess?'checked':''}> 这道题我主要靠猜（结果降低权重）</label><button class="textbtn" style="width:100%;padding:12px" data-quiz-answer="-1">完全不认识 · 跳过</button></div><div class="info-box" style="margin-top:16px">请尽量凭第一反应作答。测试过程中不提供即时答案，避免影响后续题目。</div>`}
 function finishQuiz(){const q=state.quiz,ans=q.answers;const levs=['A1','A2','B1','B2','C1'];let byLevel={};levs.forEach(l=>byLevel[l]={correct:0,weighted:0,total:0});let correct=0;for(let i=0;i<ans.length;i++){let word=wordById(q.ids[i]),a=ans[i];byLevel[word.level].total++;if(a.correct){correct++;byLevel[word.level].correct++;byLevel[word.level].weighted+=a.guess?.5:1}}let summary='基础阶段';const rate=l=>byLevel[l].total?byLevel[l].weighted/byLevel[l].total:0;if(rate('A1')>=.65&&rate('A2')>=.5)summary='A2—B1样本';if(rate('B1')>=.6)summary='B1—B2样本';if(rate('B2')>=.55)summary='B2样本';if(rate('C1')>=.65&&rate('B2')>=.6)summary='B2—C1样本';const res={type:q.type,date:dateKey(),summary,correct,total:ans.length,byLevel};state.testResults.push(res);state.testResults=state.testResults.slice(-40);state.quiz=null;markActivity();save();ui.dialog=`<div class="sheet-header"><div class="sheet-title">诊断完成 ✨</div><button class="close" data-action="close-dialog">✕</button></div><div class="center"><div class="big-number">${correct}<span style="font-size:20px;color:#a5aaca"> / ${ans.length}</span></div><strong style="font-size:15px">${esc(summary)}</strong><p class="small muted">这是样本识别水平，不是官方词汇量或雅思分数。</p></div>${['A1','A2','B1','B2','C1'].map(l=>`<div class="band-row"><b>${l}</b>${mkProgress(byLevel[l].total?100*byLevel[l].correct/byLevel[l].total:0)}<span>${byLevel[l].correct}/${byLevel[l].total}</span></div>`).join('')}<div class="sp14"></div><button class="btn full" data-action="result-train">按诊断继续训练 ${icon('arrow',16)}</button>`;render(true)}
-function pickQuizAnswer(i){const q=state.quiz;if(!q)return;const w=wordById(q.ids[q.index]);const opt=q.options[q.index]||(q.options[q.index]=mkOptions(w));const chosen=i<0?'':opt[i];if(chosen!==w.zh)upsertMistake(q.type,w.id,0,chosen);else healMistake(q.type,w.id,0);q.answers.push({correct:chosen===w.zh,guess:ui.quizGuess,chosen});q.index++;ui.quizGuess=false;save();if(q.index>=q.ids.length)finishQuiz();else render()}
+function pickQuizAnswer(i){const q=state.quiz;if(!q)return;const w=wordById(q.ids[q.index]);const opt=q.options[q.index]||(q.options[q.index]=mkOptions(w));const chosen=i<0?'':opt[i];if(chosen!==w.zh)recordPracticeError(q.type,w.id,chosen);q.answers.push({correct:chosen===w.zh,guess:ui.quizGuess,chosen});q.index++;ui.quizGuess=false;save();if(q.index>=q.ids.length)finishQuiz();else render()}
 function renderTrain(){if(ui.training==='words')return `${!ui.bookStudyOpen?'<h1 class="title">选择词书</h1><p class="subtitle">下滑算会，点「不会」收录生词，退出再进入自动续学。</p>':''}${renderWords()}`;
  const labels={sound:'听辨',listen:'听力',speak:'口语',read:'阅读',write:'写作'};const fn={sound:renderSoundTraining,listen:renderListening,speak:renderSpeaking,read:renderReading,write:renderWriting}[ui.training]||renderWords;
  return `<button class="v5-back" data-action="v5-tool-back">← 返回我的</button><div class="kicker">EXTRA PRACTICE</div><h1 class="title">${labels[ui.training]||'专项练习'}</h1>${fn()}`;}
 
 function dueWords(){
  const today=dateKey(),book=activeBook(),list=allWords();
- const due=list.filter(w=>state.vocab[w.id]&&isDue(state.vocab[w.id])&&!wordArchived(w.id)).sort((a,b)=>String(state.vocab[a.id].dueAt||state.vocab[a.id].due||'').localeCompare(String(state.vocab[b.id].dueAt||state.vocab[b.id].due||'')));
+ const due=list.filter(w=>state.vocab[w.id]&&isDue(state.vocab[w.id])).sort((a,b)=>String(state.vocab[a.id].dueAt||state.vocab[a.id].due||'').localeCompare(String(state.vocab[b.id].dueAt||state.vocab[b.id].due||'')));
  let fresh=[];ui.wordPathContext=null;ui.freshWordIds=new Set();
  if(book!=='basic' && importedBookReady()){
    const topic=state.wordTopic||'all';
@@ -185,7 +200,6 @@ function dueWords(){
  const ids=ui.freshWordIds;
  return [...fresh,...due.filter(w=>!ids.has(w.id))];
 }
-function wordArchived(id){return Object.values(state.mistakes||{}).some(m=>WORD_KINDS.has(m.kind)&&m.unit===id&&m.status==='mastered')};
 function sampleUnseen(pool,n){const salt=dateKey()+'-'+activeBook();const hash=str=>{let h=2166136261;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)}return h>>>0};return pool.map(w=>({h:hash(salt+w.id),w})).sort((a,b)=>a.h-b.h).slice(0,n).map(x=>x.w)}
 
 function openWordBookSwitch(){
@@ -202,11 +216,13 @@ function renderBookPicker(){
 async function loadSelectedBook(key){if(!SprintBooks.BOOKS[key])return;flushWordListProgress();ui.dialog=null;ui.bookStudyOpen=true;state.wordBook=key;state.wordStudyModes=state.wordStudyModes||{};state.wordStudyModes[key]='list';state.wordLevel='all';state.wordTopic='all';ui.wordId=null;ui.listBook=null;ui.flipOverride=null;ui.flip=false;ui.soundDrill=null;save();render(true);try{await SprintBooks.load(key);if(activeBook()===key&&!document.getElementById('pipiVirtualList'))render()}catch(e){render();toast(e.message)}}
 async function cacheAllBooks(){toast('正在逐本读取手机内置词书');let ok=0;for(const key of Object.keys(SprintBooks.BOOKS)){try{await SprintBooks.load(key);ok++}catch(e){}render()}toast(`成功读取 ${ok}/7 本；如有失败请检查 APK 数据文件`)}
 function bookImportModal(){if(['primary','junior','senior'].includes(activeBook())){toast('学段词书已内置，无需导入文件');return;}const key=activeBook()==='basic'?'ielts':activeBook();ui.bookImportKey=key;ui.dialog=`<div class="sheet-header"><div class="sheet-title">导入 ${esc(SprintBooks.BOOKS[key].short)} 词表</div><button class="close" data-action="close-dialog">✕</button></div><p class="small muted">使用 KyleBing english-vocabulary 项目对应的 TSV 简单词表：full_line_tsv/simple/正序/${esc(SprintBooks.BOOKS[key].filename)}.txt。文件可从项目 GitHub 页面获取，编码应为 UTF-8。</p><label class="field-label">选取 TXT / TSV 文件</label><input type="file" class="input" id="bookUpload" accept=".txt,.tsv,text/plain"/><div class="sp14"></div><button class="btn full" data-action="submit-book-import">导入并离线保存</button><p class="micro">为保证质量，仅接受字段结构正确且条目数量合理的对应词书，不把少量示例误判为整本词书。</p>`;renderDialog()}
-async function importBookFromFile(){const f=document.getElementById('bookUpload')?.files?.[0];if(!f){toast('先选择词书TXT文件');return}if(f.size>13000000){toast('文件过大，请使用简化词表');return}try{const text=await f.text();const key=ui.bookImportKey;const arr=await SprintBooks.importText(key,text);ui.dialog=null;state.wordBook=key;state.wordLevel='all';state.wordTopic='all';save();render();toast('导入成功：'+arr.length.toLocaleString('zh-CN')+' 词')}catch(e){toast('导入失败：'+e.message)}}
+async function importBookFromFile(){const f=document.getElementById('bookUpload')?.files?.[0];if(!f){toast('先选择词书TXT文件');return}if(f.size>13000000){toast('文件过大，请使用简化词表');return}try{const text=await f.text();const key=ui.bookImportKey;try{await SprintBooks.load(key)}catch(e){}const before=window.SprintBooks?.fingerprint?.(key)||'';const prior=state.wordListProgress?.[key]?.next||0;const arr=await SprintBooks.importText(key,text);const after=window.SprintBooks?.fingerprint?.(key)||'';
+ if(before&&after&&before!==after&&prior){state.wordListProgress=state.wordListProgress||{};state.wordListProgress[key]={next:0,updatedAt:new Date().toISOString()};}
+ ui.listBook=null;ui.dialog=null;state.wordBook=key;state.wordLevel='all';state.wordTopic='all';save();render();toast('导入成功：'+arr.length.toLocaleString('zh-CN')+' 词'+(before&&before!==after&&prior?' · 新词表已重置浏览位置（复习记录保留）':''))}catch(e){toast('导入失败：'+e.message)}}
 function startBookQuiz(){if(!importedBookReady()){toast('请先加载词书');return}const pool=allWords().filter(w=>w.id.startsWith('lex:')&&w.zh);if(pool.length<40){toast('当前是基础词库；请先选择一本词书');return}ui.bookQuiz={key:activeBook(),ids:rnd(pool).slice(0,30).map(w=>w.id),index:0,answers:[],options:null,feedback:null};render(true)}
-function bookQuizChoose(n){const q=ui.bookQuiz;if(!q||q.feedback)return;const w=wordById(q.ids[q.index]);const good=q.options[n]===w.zh;q.feedback={picked:n,good};q.answers.push(good);if(good)healMistake('vocab',w.id,0);else upsertMistake('vocab',w.id,0,q.options[n]);save();render()}
+function bookQuizChoose(n){const q=ui.bookQuiz;if(!q||q.feedback)return;const w=wordById(q.ids[q.index]);const good=q.options[n]===w.zh;q.feedback={picked:n,good};q.answers.push(good);if(!good)recordPracticeError('vocab',w.id,q.options[n]);save();render()}
 function bookQuizNext(){const q=ui.bookQuiz;if(!q)return;q.index++;q.options=null;q.feedback=null;if(q.index>=q.ids.length){const correct=q.answers.filter(Boolean).length;state.bookExamHistory=state.bookExamHistory||[];state.bookExamHistory.push({date:dateKey(),book:q.key,correct,total:q.ids.length});save()}render()}
-function renderBookQuiz(){const q=ui.bookQuiz;if(!q)return'';const exit=`<button class="textbtn" data-action="book-quiz-exit">${icon('chevron',14)} 返回词库</button>`;const name=SprintBooks.BOOKS[q.key]?.short||'';if(q.index>=q.ids.length){const good=q.answers.filter(Boolean).length;return `<div class="card center"><span class="lesson-badge">${esc(name)} · 词书抽测</span><div class="big-number">${good} <span style="font-size:21px">/ ${q.ids.length}</span></div><p class="subtitle">本次随机样本正确率 ${Math.round(good/q.ids.length*100)}%。该结果只是词义识别抽测，不能等同真实词汇量或雅思分数。</p><div class="sp20"></div><button class="btn full" data-action="book-quiz-start">重新抽测30题</button><div class="sp12"></div>${exit}</div>`}const w=wordById(q.ids[q.index]);if(!q.options)q.options=mkOptions(w);return `<div class="row between" style="margin-bottom:12px"><span class="lesson-badge">${esc(name)} · ${q.index+1}/30</span>${exit}</div>${mkProgress((q.index)/30*100)}<div class="sp14"></div><div class="card"><p class="eyebrow">VOCABULARY CHECK</p><div class="qword">${esc(w.word)}</div><p class="small muted">选择这个单词最贴近的中文意思</p>${q.options.map((x,i)=>`<button class="answer-btn ${q.feedback&&i===q.options.indexOf(w.zh)?'correct':''} ${q.feedback&&q.feedback.picked===i&&!q.feedback.good?'wrong':''}" data-book-answer="${i}" ${q.feedback?'disabled':''}>${'ABCD'[i]}. ${esc(x)}</button>`).join('')}${q.feedback?`<div class="info-box ${q.feedback.good?'green':''}">${q.feedback.good?'答对了':'需要复习'}：${esc(w.word)} — ${esc(w.zh)}</div><div class="sp12"></div><button class="btn full" data-action="book-quiz-next">${q.index===29?'查看学习结果':'下一题'} ${icon('arrow',16)}</button>`:''}</div><div class="note">错词会进入错题本并跟随你的跨词书进度记录。答案仅供练习参考。</div>`}
+function renderBookQuiz(){const q=ui.bookQuiz;if(!q)return'';const exit=`<button class="textbtn" data-action="book-quiz-exit">${icon('chevron',14)} 返回词库</button>`;const name=SprintBooks.BOOKS[q.key]?.short||'';if(q.index>=q.ids.length){const good=q.answers.filter(Boolean).length;return `<div class="card center"><span class="lesson-badge">${esc(name)} · 词书抽测</span><div class="big-number">${good} <span style="font-size:21px">/ ${q.ids.length}</span></div><p class="subtitle">本次随机样本正确率 ${Math.round(good/q.ids.length*100)}%。该结果只是词义识别抽测，不能等同真实词汇量或雅思分数。</p><div class="sp20"></div><button class="btn full" data-action="book-quiz-start">重新抽测30题</button><div class="sp12"></div>${exit}</div>`}const w=wordById(q.ids[q.index]);if(!q.options)q.options=mkOptions(w);return `<div class="row between" style="margin-bottom:12px"><span class="lesson-badge">${esc(name)} · ${q.index+1}/30</span>${exit}</div>${mkProgress((q.index)/30*100)}<div class="sp14"></div><div class="card"><p class="eyebrow">VOCABULARY CHECK</p><div class="qword">${esc(w.word)}</div><p class="small muted">选择这个单词最贴近的中文意思</p>${q.options.map((x,i)=>`<button class="answer-btn ${q.feedback&&i===q.options.indexOf(w.zh)?'correct':''} ${q.feedback&&q.feedback.picked===i&&!q.feedback.good?'wrong':''}" data-book-answer="${i}" ${q.feedback?'disabled':''}>${'ABCD'[i]}. ${esc(x)}</button>`).join('')}${q.feedback?`<div class="info-box ${q.feedback.good?'green':''}">${q.feedback.good?'答对了':'需要复习'}：${esc(w.word)} — ${esc(w.zh)}</div><div class="sp12"></div><button class="btn full" data-action="book-quiz-next">${q.index===29?'查看学习结果':'下一题'} ${icon('arrow',16)}</button>`:''}</div><div class="note">抽测答错只记录练习结果，不会自动加入生词本；请在词书中主动点「不会」收录。</div>`}
 
 function renderWords(){if(ui.bookQuiz)return renderBookQuiz();
  if(!ui.bookStudyOpen)return renderBookPicker();
@@ -232,23 +248,23 @@ function wordListProgress(book=activeBook()){
 }
 function wordListData(){
  const book=activeBook(),raw=book==='basic'?words:SprintBooks.get(book);
- const tag=[book,raw.length,(state.custom||[]).length].join('|');
+ const tag=[book,raw.length,(state.custom||[]).length,window.SprintBooks?.fingerprint?.(book)||''].join('|');
  if(ui.listBook!==tag){ui.listRows=(book==='basic'?raw.concat(state.custom||[]):raw);ui.listBook=tag;ui.listStart=-1}
  return ui.listRows;
 }
 function renderWordList(){
  const rows=wordListData(),next=Math.min(rows.length,wordListProgress().next);
- return `<div class="pipi-list-stats" role="status"><span>已滑过 <b id="pipiListKnown">${next.toLocaleString('zh-CN')}</b> 词</span><span id="pipiListRange">${next<rows.length?'接着学第 '+(next+1).toLocaleString('zh-CN')+' 词':'本轮已看完'} / ${rows.length.toLocaleString('zh-CN')}</span></div><p class="pipi-list-note">向下滑过＝会了 · 点「不会」加入生词本</p><div id="pipiVirtualList" aria-label="上下滑动学习英文单词"><div id="pipiVirtualRows"></div><div id="pipiListMore" aria-hidden="true"></div></div>`;
+ return `<div class="pipi-list-stats" role="status"><span>已滑过 <b id="pipiListKnown">${next.toLocaleString('zh-CN')}</b> 词</span><span id="pipiListRange">${next<rows.length?'接着学第 '+(next+1).toLocaleString('zh-CN')+' 词':'本轮已看完'} / ${rows.length.toLocaleString('zh-CN')}</span></div><p class="pipi-list-note">向下滑过＝会了 · 点「不会」加入生词本</p><div id="pipiVirtualList" aria-label="上下滑动学习英文单词"><div id="pipiListTopSpacer" aria-hidden="true"></div><div id="pipiVirtualRows"></div><div id="pipiListMore" aria-hidden="true"></div></div>`;
 }
 const phoneticCache=new Map();
 let lastListMark=null;
 function virtualWordRow(w,i){
- const id=w.id,old=state.mistakes?.[errorKey('vocab',id,0)],already=!!old&&old.status!=='mastered';
+ const id=w.id,old=state.mistakes?.[errorKey('vocab',id,0)],already=isNotebookWord(old);
  const phonetic=w.phonetic||phoneticCache.get(id)||'';
  return `<div class="pipi-list-row" data-row-index="${i}" data-word-id="${esc(id)}"><span class="pipi-list-num">${i+1}</span><div class="pipi-list-content"><div class="pipi-list-word"><span>${esc(w.word||'')}</span><button data-action="list-say" data-word-id="${esc(id)}" aria-label="朗读 ${esc(w.word||'')}">${icon('volume',18)}</button></div><div class="pipi-list-phonetic">${esc(phonetic)}</div><button class="pipi-list-meaning" data-action="list-details" data-word-id="${esc(id)}" aria-label="查看 ${esc(w.word||'')} 完整中文释义">${esc(w.zh||'暂无中文释义')}</button></div><button class="pipi-list-unknown ${already?'is-unknown':''}" data-action="list-unknown" data-word-id="${esc(id)}" aria-pressed="${already}">${already?'✓ 已收录':'＋ 不会'}</button></div>`;
 }
 let listRAF=0,listSaveTimer=0,listRestoreInProgress=false,listUserIntentAt=0,listLastScrollTop=0,listProgressDirty=false;
-let listRenderedUntil=0,listCrossingIndex=0,listUserScrollDirection=0;
+let listRenderedUntil=0,listCrossingIndex=0,listUserScrollDirection=0,listTopSpacerPx=0;
 function flushWordListProgress(){
  clearTimeout(listSaveTimer);listSaveTimer=0;
  if(!listProgressDirty)return;
@@ -277,15 +293,18 @@ function appendWordListRows(){
  const box=document.getElementById('pipiVirtualRows');if(!box)return;
  const rows=wordListData(),end=Math.min(rows.length,listRenderedUntil+40);
  if(end<=listRenderedUntil)return;
- // insertAdjacentHTML never replaces a row already visible to the user.
+ // Recycled rows remain represented by the measured spacer; visible rows stay in place.
  box.insertAdjacentHTML('beforeend',rows.slice(listRenderedUntil,end).map((w,i)=>virtualWordRow(w,listRenderedUntil+i)).join(''));
- listRenderedUntil=end;hydrateVisiblePhonetics();
+ listRenderedUntil=end;
+ const tail=document.getElementById('pipiListMore');
+ if(tail)tail.style.height=(end>=rows.length?Math.max(0,document.getElementById('viewport')?.clientHeight||0)+'px':'0px');
+ hydrateVisiblePhonetics();
 }
 function mountVirtualWordList(){
  const viewport=document.getElementById('viewport'),elem=document.getElementById('pipiVirtualList');if(!elem)return;
  listRestoreInProgress=true;listUserIntentAt=0;listUserScrollDirection=0;
  const rows=wordListData(),next=Math.min(rows.length,wordListProgress().next);
- listRenderedUntil=next;listCrossingIndex=next;
+ listTopSpacerPx=0;listRenderedUntil=next;listCrossingIndex=next;
  // Restore by starting the actual list with NEXT NEW WORD, not seeking across
  // hundreds of placeholder rows. Never issue viewport.scrollTo()/scrollTop here.
  appendWordListRows();listLastScrollTop=viewport.scrollTop;
@@ -310,6 +329,7 @@ function drawVirtualWordList(){
    listCrossingIndex++;
   }
   updateWordListProgress(listCrossingIndex,rows.length);
+  recyclePassedWordRows();
  }
  // Append before reaching the end so ordinary mobile flicks never hit a blank area.
  if(listRenderedUntil<rows.length){
@@ -318,11 +338,26 @@ function drawVirtualWordList(){
  }
  hydrateVisiblePhonetics();
 }
+// Reclaim only already-crossed rows, never the current/next unlearned row.
+// The exact-height spacer preserves native scroll position and avoids false gestures.
+function recyclePassedWordRows(){
+ const holder=document.getElementById('pipiVirtualRows'),spacer=document.getElementById('pipiListTopSpacer');
+ if(!holder||!spacer)return;
+ const safeBefore=Math.min(wordListProgress().next,listCrossingIndex)-24;
+ let removed=0,height=0;
+ while(holder.children.length>85 && removed<48){
+  const first=holder.firstElementChild;
+  if(!first||Number(first.dataset.rowIndex)>=safeBefore)break;
+  height+=first.getBoundingClientRect().height;
+  first.remove();removed++;
+ }
+ if(removed){listTopSpacerPx+=height;spacer.style.height=listTopSpacerPx+'px'}
+}
 function hydrateVisiblePhonetics(){if(!window.SprintECDICT?.lookup)return;const visible=[...document.querySelectorAll('#pipiVirtualRows .pipi-list-row')];const top=document.getElementById('viewport')?.getBoundingClientRect();let queries=0;for(const row of visible){if(queries>=12)break;const box=row.getBoundingClientRect();if(top&&(box.bottom<top.top-80||box.top>top.bottom+100))continue;const id=row.dataset.wordId,el=row.querySelector('.pipi-list-phonetic');if(!id||!el||el.textContent||!wordById(id)?.word)continue;if(phoneticCache.has(id)){el.textContent=phoneticCache.get(id)||'';continue}queries++;const word=wordById(id).word;window.SprintECDICT.lookup(word).then(result=>{const val=result?.phonetic?'/'+result.phonetic+'/':'';phoneticCache.set(id,val);if(row.isConnected&&row.dataset.wordId===id)el.textContent=val}).catch(()=>{phoneticCache.set(id,'')})}}
 function listMarkUnknown(id,button){
  if(!id||!wordById(id))return;
  const key=errorKey('vocab',id,0),old=state.mistakes?.[key];
- if(old?.status==='pending'){
+ if(isNotebookWord(old)){
    if(lastListMark?.id===id && Date.now()-lastListMark.at<8000){
      const record=lastListMark;
      if(record.previousMistake===null)delete state.mistakes[key];else state.mistakes[key]=record.previousMistake;
@@ -337,7 +372,7 @@ function listMarkUnknown(id,button){
    toast('这个词已在生词本中');return;
  }
  const previous=JSON.stringify(state),previousMistake=old?JSON.parse(JSON.stringify(old)):null,previousVocab=state.vocab[id]?JSON.parse(JSON.stringify(state.vocab[id])):null;
- upsertMistake('vocab',id,0,'列表浏览：标记不会',{source:'列表速背',bookId:activeBook()});
+ upsertMistake('vocab',id,0,'列表浏览：标记不会',{source:'列表速背',bookId:activeBook(),enrollment:'manual'});
  const event=PipiV5.addEvent(state,{type:'list_word_saved',wordId:id,bookId:activeBook()});
  if(!save(true)){state=JSON.parse(previous);return}
  const last=state.v5?.events?.at(-1);lastListMark={id,key,previousMistake,previousVocab,at:Date.now(),eventId:last?.id,mistakeEventIndex:state.mistakeEvents.length-1,mistakeEventAt:state.mistakeEvents.at(-1)?.at};
@@ -360,7 +395,7 @@ wordViewport.addEventListener('scroll',()=>{if(listRAF)return;listRAF=requestAni
 document.addEventListener('visibilitychange',()=>{if(document.hidden)flushWordListProgress()});
 window.addEventListener?.('pagehide',flushWordListProgress);
 
-function renderWordStats(){const ids=new Set(allWords().map(w=>w.id));const dueIdsSet=new Set(PipiV5.dueIds(state));const unknownCount=Object.values(state.mistakes||{}).filter(m=>WORD_KINDS.has(m.kind)&&m.status!=='mastered').reduce((set,m)=>(set.add(m.unit),set),new Set()).size;const studiedIds=Object.keys(state.vocab||{}).filter(id=>ids.has(id));const today=state.dayReviews[dateKey()]||{reviews:0,new:0};return `<div class="card"><div class="row between"><span class="small strong">词汇学习记录</span><span class="lesson-badge">今日已复习 ${today.reviews||0}</span></div><div class="sp14"></div><div class="row between"><div><div class="stat-big">${studiedIds.length}</div><div class="micro">累计进入复习</div></div><div><div class="stat-big">${unknownCount}</div><div class="micro">当前生词本（含阅读）</div></div><div><div class="stat-big">${studiedIds.filter(id=>dueIdsSet.has(id)).length}</div><div class="micro">当前今日到期</div></div></div></div>`}
+function renderWordStats(){const ids=new Set(allWords().map(w=>w.id));const dueIdsSet=new Set(PipiReviewLogic.dueIds(state));const unknownCount=Object.values(state.mistakes||{}).filter(isNotebookWord).reduce((set,m)=>(set.add(m.unit),set),new Set()).size;const studiedIds=Object.keys(state.vocab||{}).filter(id=>ids.has(id));const today=state.dayReviews[dateKey()]||{reviews:0,new:0};return `<div class="card"><div class="row between"><span class="small strong">词汇学习记录</span><span class="lesson-badge">今日已复习 ${today.reviews||0}</span></div><div class="sp14"></div><div class="row between"><div><div class="stat-big">${studiedIds.length}</div><div class="micro">累计进入复习</div></div><div><div class="stat-big">${unknownCount}</div><div class="micro">当前生词本（含阅读）</div></div><div><div class="stat-big">${studiedIds.filter(id=>dueIdsSet.has(id)).length}</div><div class="micro">当前今日到期</div></div></div></div>`}
 function toggleFastWordMeaning(){
  if(!ui.wordId||ui.page!=='train'||!ui.bookStudyOpen)return;
  const toggle=document.getElementById('fastMeaningToggle');
@@ -378,14 +413,15 @@ function toggleFastWordMeaning(){
 function gradeWord(grade){
  if(!ui.wordId||ui.gradeBusy)return;const id=ui.wordId,w=wordById(id);if(!w)return;ui.gradeBusy=true;
  try{const known=['known','good','easy'].includes(grade),pathCtx=ui.wordPathContext,inSequence=!!(ui.freshWordIds?.has(id)&&pathCtx?.rows[pathCtx.path.position]?.id===id),snapshot=PipiV5.beforeGrade(state,id,inSequence?pathCtx:null),oldJSON=JSON.stringify(state),previouslyNew=!state.vocab[id]?.lastReviewed&&!state.vocab[id]?.last;
- if(known){healMistake('vocab',id,0)}else upsertMistake('vocab',id,0,'单词复习：不会',{source:'词卡复习'});
+ if(!known)upsertMistake('vocab',id,0,'单词复习：不会',{source:'词卡复习',enrollment:'manual'});
+ else if(PipiReviewLogic.enrolled(state.mistakes?.[errorKey('vocab',id)])){healMistake('vocab',id,0);}
  const memo=state.vocab[id],d=dateKey();state.dayReviews[d]||={reviews:0,new:0};state.dayReviews[d].reviews++;if(previouslyNew)state.dayReviews[d].new++;
  if(inSequence&&!SprintBookPath.advance(state,pathCtx,id,d)){state=JSON.parse(oldJSON);toast('学习游标校验失败，已恢复');return}
  state.activity[d]=(state.activity[d]||0)+1;if(state.dayReviews[d].reviews>=8){state.dayTasks[d]||={};state.dayTasks[d].words=true}
  PipiV5.addEvent(state,{type:'word_answered',wordId:id,bookId:activeBook(),mode:inSequence?'new':'review',verdict:known?'good':'again'});
  if(!save(true)){state=JSON.parse(oldJSON);toast('存储空间不足，此次作答未保存');return}
  ui.lastGrade={id,word:w.word,at:Date.now(),snapshot,afterJSON:JSON.stringify(state)};ui.wordId=null;ui.flip=false;render();const g=ui.lastGrade;setTimeout(()=>{if(ui.lastGrade===g)document.getElementById('pipiUndoBar')?.remove()},3000);
- toast(known?`已记住 · ${wordArchived(id)?'达到熟悉里程碑，仍会定期复习':('下次 '+dueLabel(memo))}`:'已保存「不会」，约10分钟后复习');
+ toast(known?`已记录「会」 · ${memo?'下次 '+dueLabel(memo):'无需复习，未加入生词本'}`:'已保存「不会」，约10分钟后复习');
  }finally{ui.gradeBusy=false}
 }
 function nextLesson(key,arr){ui[key]=(ui[key]+1)%arr.length;if(key==='lesson'){ui.answers={};ui.transcript=false;ui.lessonSubmitted=false;ui.dictationIndex=0;ui.dictationResult=null}if(key==='reading'){ui.readingAnswers={};ui.readingSubmitted=false}render(true)}
@@ -409,12 +445,12 @@ function renderSpeaking(){const s=speaking[ui.speak];const records=state.speakin
 <div class="section-head"><h2 class="section-title">录音练口语</h2><span class="section-caption">先说出来，再复盘</span></div><div class="card"><div class="row between"><div><span class="small strong">${s.part===2?'建议准备1分钟，表达1–2分钟':'建议表达30–90秒'}</span><p class="micro">录音只在当前页面本地播放，不上传服务器。</p></div><span class="lesson-badge" id="recordTime">${String(Math.floor(ui.recordSeconds/60)).padStart(2,'0')}:${String(ui.recordSeconds%60).padStart(2,'0')}</span></div>
 <div class="sp14"></div><div class="row" style="justify-content:center"><button class="btn ${ui.recording?'ghost':''}" data-action="${ui.recording?'stop-record':'start-record'}">${icon('mic',19)} ${ui.recording?'结束录音':'开始录音'}</button><button class="btn soft" data-action="speaking-say">${icon('volume',16)} 听问题</button></div>
 ${ui.recording?`<div class="recording" style="justify-content:center;margin-top:15px"><i></i> 正在录制，请自然回答问题</div>`:''}${ui.audioUrl?`<div class="sp14"></div><audio controls style="width:100%" src="${ui.audioUrl}"></audio><p class="micro">此录音是临时文件，刷新或关闭页面后可能丢失；需要保存可使用下方下载按钮。</p><button class="btn ghost sm" data-action="download-audio">${icon('download',14)} 下载本次录音</button>`:''}</div>
-<div class="section-head"><h2 class="section-title">按雅思维度自我复盘</h2></div><div class="card"><p class="subtitle">以下项目是练习清单，不是自动雅思评分。</p>${[['fluency','流利度：是否能持续表达、减少长停顿'],['vocab','词汇：是否能用恰当的替换表达'],['grammar','语法：是否使用多种句式且准确'],['pron','发音：是否清晰易懂、重音自然']].map(([k,t])=>`<label class="rubric"><input type="checkbox" data-rubric="${k}" ${ui['r_'+k]?'checked':''}>${t}</label>`).join('')}<div class="sp14"></div><button class="btn full" data-action="save-speaking">保存本次口语训练记录</button><div class="sp8"></div><button class="btn ghost full" data-action="next-speak">换一个话题 ${icon('arrow',16)}</button></div><div class="note">录音功能需要浏览器允许麦克风，并通常要求 HTTPS 或 localhost。未获得麦克风权限时仍可通过自评完成练习。</div>`}
+<div class="section-head"><h2 class="section-title">按雅思维度自我复盘</h2></div><div class="card"><p class="subtitle">以下项目是练习清单，不是自动雅思评分。</p>${[['fluency','流利度：是否能持续表达、减少长停顿'],['vocab','词汇：是否能用恰当的替换表达'],['grammar','语法：是否使用多种句式且准确'],['pron','发音：是否清晰易懂、重音自然']].map(([k,t])=>`<label class="rubric"><input type="checkbox" data-rubric="${k}" ${ui['r_'+k]?'checked':''}>${t}</label>`).join('')}<div class="sp14"></div><button class="btn full" data-action="save-speaking">保存本次口语训练记录</button><div class="sp8"></div><button class="btn ghost full" data-action="next-speak">换一个话题 ${icon('arrow',16)}</button></div><div class="card"><div class="section-head"><h2 class="section-title">历史口语练习</h2></div>${(state.speakingHistory||[]).slice(-15).reverse().map(row=>`<div class="task"><span class="task-main"><strong>${esc(row.date)} · ${esc(speaking[row.topic]?.title||'口语练习')}</strong><span>${Number(row.seconds)||0}秒 · ${row.recordingId?'本机录音':'未保存录音'}</span></span>${row.recordingId?`<button class="btn ghost sm" data-speaking-recording="${esc(row.recordingId)}">播放录音</button>`:''}</div>`).join('')||'<p class="micro">暂无练习记录</p>'}</div><div class="note">录音保存于手机本地 IndexedDB，不包含在学习 JSON 备份中；重要录音仍请点击下载另存到手机文件。录音权限需浏览器授权。</div>`}
 function renderReading(){const r=readings[ui.reading],a=ui.readingAnswers,locked=ui.readingSubmitted;return topicPicker('read')+`<div class="row between"><span class="lesson-badge">阅读练习 ${ui.reading+1} / ${readings.length}</span><span class="small muted">难度 ${r.level}</span></div><div class="sp14"></div><div class="card"><div class="eyebrow">READING PRACTICE</div><h2 class="section-title" style="margin:9px 0 15px">${esc(r.title)}</h2><div class="script-box" style="background:#fafbfe">${esc(r.text)}</div></div><div class="section-head"><h2 class="section-title">阅读理解</h2><span class="section-caption">${Object.keys(a).length}/${r.qs.length}</span></div><div class="card">${r.qs.map((q,i)=>radioQ(q,i,'read',a,locked)).join('')}<div class="sp14"></div>${locked?`<div class="info-box green">本组正确 ${ui.readingCorrect}/${r.qs.length} 题。错题建议回到段落定位关键词与同义替换。</div><div class="sp14"></div><button class="btn full" data-action="next-read">下一篇阅读 ${icon('arrow',16)}</button>`:`<button class="btn full" data-action="submit-read" ${Object.keys(a).length!==r.qs.length?'disabled':''}>提交答案 · 查看解析</button>`}</div><div class="note">站内为短篇原创专项训练，不等同于雅思正式阅读3篇、60分钟、40道题。建议每周使用官方完整样卷练时间分配。</div>`}
 function submitRead(){const r=readings[ui.reading];if(Object.keys(ui.readingAnswers).length!==r.qs.length)return;const correct=r.qs.filter((q,i)=>ui.readingAnswers[i]===q[2]).length;ui.readingCorrect=correct;ui.readingSubmitted=true;r.qs.forEach((q,i)=>ui.readingAnswers[i]===q[2]?healMistake('read',ui.reading,i):upsertMistake('read',ui.reading,i,ui.readingAnswers[i]));state.readHistory.push({date:dateKey(),reading:ui.reading,correct,total:r.qs.length});markActivity('read');render();toast(`阅读练习完成：${correct}/${r.qs.length}`)}
 function eligibleWriting(){return writing.map((w,i)=>({...w,index:i})).filter(w=>w.type==='task2'||w.type===(state.exam==='academic'?'academic1':'general1'))}
 function wordsOf(s){return (s||'').trim().match(/[A-Za-z]+(?:['’-][A-Za-z]+)*/g)||[]}
-function renderWriting(){const items=eligibleWriting();let w=writing[ui.write];if(!items.some(x=>x.index===ui.write)){ui.write=items[0].index;w=writing[ui.write]}const draft=state.writingDrafts[ui.write]||'',count=wordsOf(draft).length;return writingPicker()+`<div class="row between"><span class="lesson-badge">Writing · ${w.type==='task2'?'Task 2':w.type==='academic1'?'Academic Task 1':'General Task 1'}</span><button class="chip" data-action="next-writing">换题 ${icon('refresh',13)}</button></div><div class="sp14"></div><div class="card"><h2 class="section-title" style="margin-bottom:10px">${esc(w.title)}</h2><div class="script-box" style="background:#fafbff">${esc(w.prompt)}</div><div class="sp14"></div><div class="info-box">${esc(w.tips)}</div></div><div class="section-head"><h2 class="section-title">我的作文</h2><span class="section-caption">实时自动保存</span></div><div class="card"><div class="row between"><span class="small muted">建议最低 ${w.min} 词</span><span class="lesson-badge" id="writing-count">${count} words</span></div><div class="sp14"></div><textarea id="writingInput" class="textarea" style="min-height:285px" aria-label="输入英语作文" placeholder="Write your essay in English...\n\nStart with your main idea, then support it with clear reasons and examples.">${esc(draft)}</textarea><div class="sp8"></div><div class="meter"><div id="writing-meter" style="width:${clamp(count/w.min*100,0,100)}%"></div></div><p class="micro">字数仅做形式提示，达到字数不代表写作符合7分标准。</p><div class="divider"></div><span class="small strong">自检清单</span>${[['task','回答了题目的全部要求'],['coherence','段落逻辑清楚，有中心句与衔接'],['lexical','用词准确，避免不必要的复杂词'],['grammar','语法、标点、时态基本准确']].map(([k,t])=>`<label class="rubric"><input type="checkbox" data-write-rubric="${k}" ${ui['w_'+k]?'checked':''}>${t}</label>`).join('')}<button class="btn full" data-action="submit-writing">保存作文及训练记录</button></div><div class="sp14"></div>${renderResource(resourceLinks[4])}<div class="note">作文只提供保存、字数和结构自检；没有人工或真正的模型评分，不能自动预测雅思写作分数。</div>`}
+function renderWriting(){const items=eligibleWriting();let w=writing[ui.write];if(!items.some(x=>x.index===ui.write)){ui.write=items[0].index;w=writing[ui.write]}const draft=state.writingDrafts[ui.write]||'',count=wordsOf(draft).length;return writingPicker()+`<div class="row between"><span class="lesson-badge">Writing · ${w.type==='task2'?'Task 2':w.type==='academic1'?'Academic Task 1':'General Task 1'}</span><button class="chip" data-action="next-writing">换题 ${icon('refresh',13)}</button></div><div class="sp14"></div><div class="card"><h2 class="section-title" style="margin-bottom:10px">${esc(w.title)}</h2><div class="script-box" style="background:#fafbff">${esc(w.prompt)}</div><div class="sp14"></div><div class="info-box">${esc(w.tips)}</div></div><div class="section-head"><h2 class="section-title">我的作文</h2><span class="section-caption">实时自动保存</span></div><div class="card"><div class="row between"><span class="small muted">建议最低 ${w.min} 词</span><span class="lesson-badge" id="writing-count">${count} words</span></div><div class="sp14"></div><textarea id="writingInput" class="textarea" style="min-height:285px" aria-label="输入英语作文" placeholder="Write your essay in English...\n\nStart with your main idea, then support it with clear reasons and examples.">${esc(draft)}</textarea><div class="sp8"></div><div class="meter"><div id="writing-meter" style="width:${clamp(count/w.min*100,0,100)}%"></div></div><p class="micro">字数仅做形式提示，达到字数不代表写作符合7分标准。</p><div class="divider"></div><span class="small strong">自检清单</span>${[['task','回答了题目的全部要求'],['coherence','段落逻辑清楚，有中心句与衔接'],['lexical','用词准确，避免不必要的复杂词'],['grammar','语法、标点、时态基本准确']].map(([k,t])=>`<label class="rubric"><input type="checkbox" data-write-rubric="${k}" ${ui['w_'+k]?'checked':''}>${t}</label>`).join('')}<button class="btn full" data-action="submit-writing">保存作文及训练记录</button></div><div class="sp14"></div><div class="card"><div class="section-head"><h2 class="section-title">历史作文 · 每次独立保存</h2></div>${(state.writingHistory||[]).slice(-20).reverse().map(h=>`<button class="task" data-writing-history-id="${esc(h.id||'')}" ${h.text?'':'disabled'}><span class="task-main"><strong>${esc(h.date)} · ${esc(writing[h.prompt]?.title||'写作练习')}</strong><span>${Number(h.wordCount)||0}词 · ${h.text?'点击查看全文':'旧记录未保存全文'}</span></span>${icon('chevron',18)}</button>`).join('')||'<p class="micro">还没有历史作文。</p>'}</div><div class="sp14"></div>${renderResource(resourceLinks[4])}<div class="note">作文只提供保存、字数和结构自检；没有人工或真正的模型评分，不能自动预测雅思写作分数。</div>`}
 function renderPlan(){const d=dayNumber(),phase=currentPhase();const daylist=Array.from({length:14},(_,i)=>daysFrom(dateKey(),i-6));return `<div class="kicker">03 / YOUR 180-DAY ROADMAP</div><h1 class="title">你的半年冲刺路线</h1><p class="subtitle">目标7分需要稳定的四科能力。先诊断，再制定每周重点，持续用真实模考校准。</p>
 <div class="sp20"></div><div class="card"><div class="row between"><div><div class="eyebrow">当前计划</div><h2 style="font-size:25px;letter-spacing:-.6px;margin:6px 0">Day ${d} <span style="font-size:14px;color:#abb3c3">/ 180</span></h2><p class="small muted" style="margin:0">预计结束：${fmtDate(daysFrom(state.start,180))} · 还剩 ${daysLeft()} 天</p></div><div class="circle-progress" style="--p:${clamp(Math.round((180-daysLeft())/180*100),0,100)}%"><span>${clamp(Math.round((180-daysLeft())/180*100),0,100)}%</span></div></div><div class="sp14"></div>${mkProgress((180-daysLeft())/180*100)}</div>
 <div class="section-head"><h2 class="section-title">四个学习阶段</h2></div>${phaseDefs.map(([title,range,desc],i)=>`<div class="phase ${i===phase?'current':''}"><div class="phase-left">${i<phase?'已过阶段':i===phase?'进行中':'未开始'}</div><strong><span class="timeline-dot"></span>${title}</strong><div class="micro" style="margin:6px 0 0 17px">${range}</div><p style="margin-left:17px">${desc}</p></div>`).join('')}
@@ -430,17 +466,21 @@ function pipiUpdateCacheStatus(){
  const navButton=document.querySelector('#bottomNav [data-page="me"]');navButton?.classList.toggle('pipi-cache-running',data.state==='running');
  const el=document.getElementById('pipiCacheGlobalStatus');if(!el)return;
  const done=Number(data.done)||0,total=Number(data.total)||0;
- el.textContent=data.state==='running'?'生成中 '+done+' / '+total+' 段 ›':data.state==='paused'?'已暂停 · 继续缓存 ›':data.state==='finished'?'已缓存完成 ›':'查看当前进度 ›';
+ const lastWrite=Number(data.lastWrittenAt||0),elapsed=lastWrite?Date.now()-lastWrite:0;
+ const stalled=data.state==='running' && (data.stalled===true||(data.phase==='generating'&&lastWrite>0&&elapsed>5*60*1000));
+ const detail=(data.lastRestartReason||data.error||'');
+ el.title='阶段：'+String(data.phase||'未知')+'；上次真实写入：'+(lastWrite?Math.round(elapsed/60000)+'分钟前':'尚无')+'；异常恢复：'+(Number(data.autoRestarts)||0)+'次；'+detail;
+ el.textContent=data.state==='running'?(stalled?'生成停滞，恢复检测中 ›':'生成中 '+done+' / '+total+' 段 · 新增'+(Number(data.newClips)||0)+' · 恢复'+(Number(data.autoRestarts)||0)+'次 ›'):data.state==='recovering'?'后台服务恢复中 ›':data.state==='paused'?'已暂停 · 继续缓存 ›':data.state==='finished'?'已缓存完成 ›':data.state==='error'?'缓存异常：'+String(detail).slice(0,28)+' ›':'查看当前进度 ›';
  }catch(_){ }
 }
 setInterval(pipiUpdateCacheStatus,12000);
-function renderMe(){const v=PipiV5.ensure(state),total=Object.keys(state.vocab||{}).length,due=PipiV5.dueIds(state).length;
+function renderMe(){const v=PipiV5.ensure(state),total=Object.keys(state.vocab||{}).length,due=PipiReviewLogic.dueIds(state).length;
  return `<div class="kicker">05 / TOOL CENTER</div><h1 class="title">学习工具</h1><p class="subtitle">离线词典、整书语音缓存、数据备份与学习设置，集中在这里。</p><a class="pipi-cache-entry" href="./voice-cache.html"><span>♫ 后台语音缓存</span><strong id="pipiCacheGlobalStatus">查看当前进度 ›</strong></a>
  <div class="v5-me-stat"><div><b>${total}</b><span>累计接触单词</span></div><div><b>${due}</b><span>待复习单词</span></div><div><b>${streak()}</b><span>连续学习天数</span></div></div>
  <div class="v5-menu-list"><button data-page="review">↻ <span><b>我的生词与复习</b><small>全部词书与阅读生词统一复习</small></span>›</button><button data-page="metrics">▤ <span><b>完整学习数据</b><small>历史训练、连续天数与统计</small></span>›</button><button data-action="settings">⚙ <span><b>个人学习设置</b><small>保留原版雅思学习设置</small></span>›</button></div>
  <h2 class="v5-subtitle">离线数据管理</h2><div class="v5-menu-list"><a href="./backup.html">⇩ <span><b>导出 / 恢复学习记录</b><small>学习进度、FSRS、阅读书签备份</small></span>›</a><a href="./dictionary.html">▣ <span><b>离线英汉词典</b><small>ECDICT 本机查词</small></span>›</a></div>
  <h2 class="v5-subtitle">有声书工具</h2><div class="v5-menu-list"><a href="./voice-cache.html">♫ <span><b>一键缓存全部原著语音</b><small>支持锁屏、通知栏进度与断点续存</small></span>›</a></div>
- <h2 class="v5-subtitle">更多工具</h2><div class="v5-menu-list"><button data-page="test">◇ <span><b>基础测评</b><small>保留历史测评数据</small></span>›</button><button data-page="plan">◷ <span><b>学习计划</b><small>原有180天计划仍可使用</small></span>›</button>${[['listen','听力'],['speak','口语'],['read','阅读练习'],['write','写作'],['sound','听辨']].map(([k,t])=>`<button data-go-train="${k}">◦ <span><b>${t}专项</b><small>旧版功能与记录保留</small></span>›</button>`).join('')}</div><p class="v5-version">皮皮 V${esc(window.PipiBuildVersion||'5.12.8')} · 本地离线版</p>`;
+ <h2 class="v5-subtitle">更多工具</h2><div class="v5-menu-list"><button data-page="test">◇ <span><b>基础测评</b><small>保留历史测评数据</small></span>›</button><button data-page="plan">◷ <span><b>学习计划</b><small>原有180天计划仍可使用</small></span>›</button>${[['listen','听力'],['speak','口语'],['read','阅读练习'],['write','写作'],['sound','听辨']].map(([k,t])=>`<button data-go-train="${k}">◦ <span><b>${t}专项</b><small>旧版功能与记录保留</small></span>›</button>`).join('')}</div><p class="v5-version">皮皮 V${esc(window.PipiBuildVersion||'5.12.9')} · 本地离线版</p>`;
 }
 function renderOldMe(){const now=dateKey(),rev=Object.values(state.dayReviews).reduce((s,x)=>s+(x.reviews||0),0);const listened=sumHist(state.listenHistory,'correct'),ltotal=sumHist(state.listenHistory,'total'),read=sumHist(state.readHistory,'correct'),rtotal=sumHist(state.readHistory,'total');return `<div class="kicker">04 / MY LEARNING RECORD</div><h1 class="title">进步，有迹可循</h1><p class="subtitle">记录真实训练与模考，而不是虚构一个“系统预测雅思分数”。</p><div class="sp20"></div><div class="stat-grid"><div class="card"><div class="eyebrow">连续学习</div><div class="stat-big">${streak()} <span class="small muted">天</span></div><div class="micro">累计活跃 ${totalActiveDays()} 天</div></div><div class="card"><div class="eyebrow">间隔复习</div><div class="stat-big">${rev} <span class="small muted">次</span></div><div class="micro">已接触 ${Object.keys(state.vocab).length} 词</div></div><div class="card"><div class="eyebrow">听力站内题正确率</div><div class="stat-big">${ltotal?Math.round(listened/ltotal*100)+'%':'—'}</div><div class="micro">${listened}/${ltotal} 题（原创短练）</div></div><div class="card"><div class="eyebrow">阅读站内题正确率</div><div class="stat-big">${rtotal?Math.round(read/rtotal*100)+'%':'—'}</div><div class="micro">${read}/${rtotal} 题（原创短练）</div></div></div>
 <div class="section-head"><h2 class="section-title">官方模考总分趋势</h2><button class="link-mini" data-action="open-mock">录入分数 +</button></div><div class="card"><div class="row between"><div><div class="eyebrow">LATEST PRACTICE</div><div class="stat-big">${state.mockHistory.length?state.mockHistory.at(-1).overall.toFixed(1):'—'} <span class="small muted">/ 9.0</span></div></div><span class="chip">目标 ${state.goal.toFixed(1)}</span></div>${sparkLine(state.mockHistory.slice(-8).map(x=>x.overall))}<p class="micro">只采用你主动录入的官方样卷／教师评分；自报分数不等同正式考试成绩。</p></div>
@@ -475,9 +515,9 @@ function captureDictationMistakes(reference,answer,lessonIndex){
  const remaining=new Map();typed.forEach(w=>remaining.set(w,(remaining.get(w)||0)+1));
  let errors=0;
  for(const w of ref){const count=remaining.get(w)||0;if(count){remaining.set(w,count-1);continue}
-  const id='lex:'+w,old=wordById(id),gloss=makeReaderGloss(w,null);
-  if(!old){state.readerWords=state.readerWords||{};state.readerWords[id]={id,word:w,zh:gloss.zh,level:gloss.level,topic:'听写错词',example:reference}}
-  upsertMistake('dictationword',id,0,'逐句听写漏词',{source:'听写 · '+(listening[lessonIndex]?.title||'听力训练'),sentence:reference});errors++;
+  const id='lex:'+w;
+  // Failed dictation is practice telemetry only; do not register a new readerWord or FSRS card.
+  recordPracticeError('dictationword',id,'逐句听写漏词');errors++;
  }
  return errors
 }
@@ -489,6 +529,9 @@ case 'v5-reveal':document.getElementById('pipiReviewMeaning').hidden=false;docum
 case 'v5-speak':speak(wordById(ui.v5ReviewId)?.word||'');break;
 case 'v5-review-pass':pipiReviewAnswer(true);break;
 case 'v5-review-fail':pipiReviewAnswer(false);break;
+case 'v5-review-remove':pipiReviewRemove();break;
+case 'v5-review-enroll':pipiReviewEnroll();break;
+case 'v5-review-more':loadMoreReview();break;
 case 'reader-back':ui.readerBookId=null;showPage('library');break;
 case 'reader-toggle-cn':state.readerSettings=state.readerSettings||{};state.readerSettings.showChinese=! (state.readerSettings.showChinese!==false);save();render();break;
 case 'reader-font-up':state.readerSettings.fontSize=clamp((state.readerSettings.fontSize||18)+2,15,24);save();render();break;
@@ -498,8 +541,8 @@ case 'reader-complete':moveReaderChapter(1,true);break;
 case 'reader-pronounce':if(ui.readerSelection)speak(ui.readerSelection.word,.89);break;
 case 'reader-mark-word':saveReaderMarkedWord();break;
 case 'review-reveal':document.getElementById('reviewMeaning')?.classList.remove('hide');break;
-case 'review-self-known':{const m=state.mistakes?.[ui.reviewId];if(m){healMistake(m.kind,m.unit,m.q);save();ui.dialog=null;render();toast(m.status==='mastered'?'已达到熟悉里程碑，仍会按FSRS安排复习':'已记录「会」，FSRS已安排下次复习')}break}
-case 'review-self-fail':{const m=state.mistakes?.[ui.reviewId];if(m){upsertMistake(m.kind,m.unit,m.q,'再次回忆失败',{source:'错词自测',bookId:m.bookId,sentence:m.sentence,sentenceZh:m.sentenceZh});save();ui.dialog=null;render();toast('已记录「不会」，10分钟后可再次复习')}break}
+case 'review-self-known':{const m=state.mistakes?.[ui.reviewId];if(PipiReviewLogic.enrolled(m)){healMistake(m.kind,m.unit,m.q);save();ui.dialog=null;render();toast('已记录「会」，FSRS已安排下次复习，单词仍在生词本')}break}
+case 'review-self-fail':{const m=state.mistakes?.[ui.reviewId];if(PipiReviewLogic.enrolled(m)){upsertMistake(m.kind,m.unit,m.q,'再次回忆失败',{source:'错词自测',bookId:m.bookId,sentence:m.sentence,sentenceZh:m.sentenceZh,enrollment:'manual'});save();ui.dialog=null;render();toast('已记录「不会」，10分钟后可再次复习')}break}
 
 case 'choose-wordbook':case 'switch-book':openWordBookSwitch();break;
 case 'load-active-book':loadSelectedBook(activeBook());break;
@@ -543,7 +586,7 @@ case 'listen-play':speak(listening[ui.lesson].script,ui.speechRate);break;
 case 'listen-stop':stopSpeak();break;
 case 'dictation-play':{const sentences=(listening[ui.lesson].script.match(/[^.!?]+[.!?]+/g)||[listening[ui.lesson].script]);speak(sentences[ui.dictationIndex%sentences.length].trim(),ui.speechRate);break}
 case 'dictation-next':{const sentences=(listening[ui.lesson].script.match(/[^.!?]+[.!?]+/g)||[listening[ui.lesson].script]);ui.dictationIndex=(ui.dictationIndex+1)%sentences.length;ui.dictationResult=null;render();break}
-case 'dictation-check':{const ans=document.getElementById('dictationInput')?.value||'';if(!ans.trim()){toast('请先输入你听到的英文');return}const lines=listening[ui.lesson].script.match(/[^.!?]+[.!?]+/g)||[listening[ui.lesson].script];const ref=lines[ui.dictationIndex%lines.length].trim();const score=Math.round(wordMatch(ref,ans)*100);const missed=captureDictationMistakes(ref,ans,ui.lesson);ui.dictationResult={score,answer:ans,missed};state.dictationHistory.push({date:dateKey(),lesson:ui.lesson,part:ui.dictationIndex,score});markActivity();render();toast(`本句匹配率 ${score}% · ${missed}个漏词已记录`);break}
+case 'dictation-check':{const ans=document.getElementById('dictationInput')?.value||'';if(!ans.trim()){toast('请先输入你听到的英文');return}const lines=listening[ui.lesson].script.match(/[^.!?]+[.!?]+/g)||[listening[ui.lesson].script];const ref=lines[ui.dictationIndex%lines.length].trim();const score=Math.round(wordMatch(ref,ans)*100);const missed=captureDictationMistakes(ref,ans,ui.lesson);ui.dictationResult={score,answer:ans,missed};state.dictationHistory.push({date:dateKey(),lesson:ui.lesson,part:ui.dictationIndex,score});markActivity();render();toast(`本句匹配率 ${score}% · ${missed}个漏词已记入练习统计（未自动收录生词）`);break}
 case 'toggle-transcript':ui.transcript=!ui.transcript;render();break;
 case 'submit-listen':submitListen();break;
 case 'next-listen':nextLesson('lesson',listening);break;
@@ -551,18 +594,36 @@ case 'speaking-say':speak(speaking[ui.speak].prompt,.91);break;
 case 'start-record':startRecorder();break;
 case 'stop-record':stopRecorder();break;
 case 'download-audio':if(ui.recordBlob)download(`speaking-${dateKey()}.webm`,ui.recordBlob,ui.recordBlob.type);break;
-case 'save-speaking':{const rubric=['fluency','vocab','grammar','pron'].filter(k=>ui['r_'+k]);state.speakingHistory.push({date:dateKey(),topic:ui.speak,seconds:ui.recordSeconds,checklist:rubric});markActivity('speak');render();toast('口语练习已记录（不是雅思评分）');break}
+case 'save-speaking':{
+ const rubric=['fluency','vocab','grammar','pron'].filter(k=>ui['r_'+k]);const id='rec-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
+ const blob=ui.recordBlob,topic=ui.speak,seconds=ui.recordSeconds;
+ (async()=>{let recordingId=null;if(blob?.size){try{await PipiSpeakingArchive.put(id,blob);recordingId=id}catch(e){toast('录音归档失败，请先下载音频到手机文件');console.error(e);return}}
+ const d=dateKey(),previousActivity=state.activity[d]||0,previousTasks=state.dayTasks[d];
+ state.speakingHistory.push({date:d,topic,seconds,checklist:rubric,recordingId});
+ state.activity[d]=previousActivity+1;state.dayTasks[d]={...(previousTasks||{}),speak:true};
+ if(!save(true)){state.speakingHistory.pop();if(previousActivity)state.activity[d]=previousActivity;else delete state.activity[d];if(previousTasks)state.dayTasks[d]=previousTasks;else delete state.dayTasks[d];toast('练习记录保存失败');return}
+ render();toast(recordingId?'训练记录和录音均已保存到本机':'训练记录已保存（没有录音文件）');})();break} 
 case 'next-speak':stopSpeak();if(ui.recording)stopRecorder(true);ui.speak=(ui.speak+1)%speaking.length;ui.recordSeconds=0;ui.audioUrl=null;ui.recordBlob=null;['fluency','vocab','grammar','pron'].forEach(k=>ui['r_'+k]=false);render(true);break;
 case 'submit-read':submitRead();break;
 case 'next-read':nextLesson('reading',readings);break;
 case 'next-writing':{const items=eligibleWriting();const i=items.findIndex(x=>x.index===ui.write);ui.write=items[(i+1)%items.length].index;render(true);break}
-case 'submit-writing':{const text=state.writingDrafts[ui.write]||'';const count=wordsOf(text).length;if(count<50){toast('至少写50个英文词后才记录训练，草稿已保存');return}state.writingHistory=state.writingHistory||[];state.writingHistory.push({date:dateKey(),prompt:ui.write,wordCount:count,checklist:['task','coherence','lexical','grammar'].filter(k=>ui['w_'+k])});markActivity('write');render();toast(`作文已保存（${count}词），建议请老师评分`);break}
+case 'submit-writing':{flushWritingDraft();const text=state.writingDrafts[ui.write]||'';const count=wordsOf(text).length;if(count<50){toast('至少写50个英文词后才记录训练，草稿已保存');return}state.writingHistory=state.writingHistory||[];const oldCount=state.writingHistory.length,d=dateKey(),oldActivity=state.activity[d]||0,oldTasks=state.dayTasks[d];
+ state.writingHistory.push({id:'essay-'+Date.now()+'-'+Math.random().toString(36).slice(2,8),date:d,savedAt:new Date().toISOString(),prompt:ui.write,wordCount:count,text,checklist:['task','coherence','lexical','grammar'].filter(k=>ui['w_'+k])});
+ state.activity[d]=oldActivity+1;state.dayTasks[d]={...(oldTasks||{}),write:true};
+ if(!save(true)){state.writingHistory.length=oldCount;if(oldActivity)state.activity[d]=oldActivity;else delete state.activity[d];if(oldTasks)state.dayTasks[d]=oldTasks;else delete state.dayTasks[d];toast('作文保存失败，草稿仍保留，请先备份');return}
+ render();toast(`作文已保存（${count}词），建议请老师评分`);break}
 case 'open-mock':mockModal();break;
 case 'save-mock':saveMock();break;
 case 'save-settings':saveSettings();break;
 case 'export':location.href='./backup.html';break;
 case 'import-data':location.href='./backup.html';break;
-case 'reset-data':{if(confirm('将删除本浏览器全部学习记录，确定清空？')){if(confirm('请再次确认：这将清空已学单词、测试和作文等所有记录。')){localStorage.removeItem(KEY);state=defaultState();ui.dialog=null;showPage('today');toast('本地学习数据已清空')}}break}
+case 'reset-data':{if(confirm('将清空本机学习记录和阅读书签（不会删除离线原著或已合成的语音），确定继续？')){if(confirm('最后确认：学习数据将不可恢复。建议先从工具页面导出 JSON。')){
+  let sqliteOk=true;try{if(window.SprintAndroid?.clearLearningStateSQLite)sqliteOk=!!window.SprintAndroid.clearLearningStateSQLite()}catch(e){sqliteOk=false}
+  if(!sqliteOk){toast('SQLite 数据清理失败，已取消清空以防旧学习记录自动恢复');break}
+  try{for(const key of Object.keys(localStorage))if(/^(?:sprint7_|pipi_)/.test(key)&&key!=='sprint7_book_cache_v1')localStorage.removeItem(key)}catch(e){toast('本地数据清理失败，请不要继续学习，先查看备份');break}
+  window.PipiStateSafety?.clear?.().catch(e=>console.warn('快照清除失败',e));
+  state=defaultState();ui.dialog=null;ui.listBook=null;showPage('today');toast('学习记录、阅读位置和恢复快照清理完成（语音文件保留）')
+ }}break}
 }}
 
 
@@ -570,11 +631,11 @@ function soundPool(){if(activeBook()!=='basic'&&importedBookReady())return allWo
 function beginSoundTraining(){const existing=state.soundHistory||[];const pool=soundPool();const recent=new Set(existing.slice(-3).flatMap(x=>x.ids||[]));let opts=rnd(pool.filter(w=>!recent.has(w.id)));if(opts.length<15)opts=rnd(pool);ui.soundDrill={ids:opts.slice(0,15).map(w=>w.id),index:0,answers:[],options:null,feedback:null};render()}
 function getSoundOptions(w){if(!ui.soundDrill)return [];const ss=ui.soundDrill;if(ss.options&&ss.optionsIndex===ss.index)return ss.options;ss.options=mkOptions(w);ss.optionsIndex=ss.index;return ss.options}
 function renderSoundTraining(){const s=ui.soundDrill;
- if(!s)return `<div class="card"><span class="lesson-badge">核心专项 · 从声音到词义</span><h2 class="section-title" style="margin-top:12px">听到英语，立即反应</h2><p class="subtitle" style="margin:10px 0 16px">只看文字背单词不够。这里每组15道听词辨义题，先听发音，再在脑中形成含义，答错自动进入错题本。可按词汇等级筛选难度。</p><button class="btn full" data-action="start-sound-drill">开始15题听辨训练 ${icon('arrow',16)}</button><p class="micro">语音由设备自带英语音色合成，不是真人听力材料。</p></div><div class="section-head"><h2 class="section-title">历史表现</h2></div>${soundHistoryPanel()}`;
+ if(!s)return `<div class="card"><span class="lesson-badge">核心专项 · 从声音到词义</span><h2 class="section-title" style="margin-top:12px">听到英语，立即反应</h2><p class="subtitle" style="margin:10px 0 16px">只看文字背单词不够。这里每组15道听词辨义题，先听发音，再在脑中形成含义，答错只记录练习结果；只有主动标记「不会」才加入 FSRS 生词本。可按词汇等级筛选难度。</p><button class="btn full" data-action="start-sound-drill">开始15题听辨训练 ${icon('arrow',16)}</button><p class="micro">语音由设备自带英语音色合成，不是真人听力材料。</p></div><div class="section-head"><h2 class="section-title">历史表现</h2></div>${soundHistoryPanel()}`;
  if(s.index>=s.ids.length)return `<div class="card center"><span class="lesson-badge">训练结束</span><div class="big-number">${s.answers.filter(x=>x.correct).length}<span style="font-size:20px;color:#a3a9b9"> / ${s.ids.length}</span></div><p class="small muted">听辨分数是练习准确率，非官方雅思分数。</p><button class="btn full" data-action="start-sound-drill">再来一组</button><div class="sp8"></div><button class="btn ghost full" data-page="review">复盘听辨错题</button></div>${soundHistoryPanel()}`;
  const w=wordById(s.ids[s.index]);const opts=getSoundOptions(w);const answered=!!s.feedback;
  return `<div class="row between" style="margin-bottom:13px"><span class="lesson-badge">听辨挑战 · 第 ${s.index+1}/${s.ids.length} 题</span><span class="small muted">${esc(w.level)} · 先听后选</span></div>${mkProgress(s.index/s.ids.length*100)}<div class="sp14"></div><div class="card" style="padding:25px 18px"><div class="center"><span class="eyebrow">DON'T READ, LISTEN</span><div class="sp20"></div><button class="btn soft" data-action="sound-play" style="height:80px;width:80px;padding:0;border-radius:24px">${icon('volume',31)}</button><h2 style="font-size:17px;margin:17px 0 6px">先听发音，选出词义</h2><p class="micro">如完全听不出来，可重放并做标记</p></div><div class="sp14"></div>${opts.map((o,i)=>`<button class="answer-btn ${answered&&o===w.zh?'correct':''} ${answered&&s.feedback?.chosen===i&&o!==w.zh?'wrong':''}" ${answered?'disabled':''} data-sound-choice="${i}">${String.fromCharCode(65+i)}. ${esc(o)}</button>`).join('')}${answered?`<div class="info-box ${s.feedback.correct?'green':'orange'}" style="margin-top:12px"><b>${s.feedback.correct?'识别正确':'这次没有听出来'}</b><br>${esc(w.word)} · ${esc(w.zh)}${w.example?`<br>${esc(w.example)}`:''}</div><div class="sp14"></div><button class="btn full" data-action="sound-next">${s.index+1===s.ids.length?'完成并查看结果':'继续下一题'} ${icon('arrow',16)}</button>`:''}</div>`}
-function answerSound(i){const s=ui.soundDrill;if(!s||s.feedback)return;const w=wordById(s.ids[s.index]);const correct=getSoundOptions(w)[i]===w.zh;s.answers.push({id:w.id,correct});s.feedback={chosen:i,correct};if(correct)healMistake('sound',w.id,0);else upsertMistake('sound',w.id,0,getSoundOptions(w)[i]);save();render()}
+function answerSound(i){const s=ui.soundDrill;if(!s||s.feedback)return;const w=wordById(s.ids[s.index]);const correct=getSoundOptions(w)[i]===w.zh;s.answers.push({id:w.id,correct});s.feedback={chosen:i,correct};if(!correct)recordPracticeError('sound',w.id,getSoundOptions(w)[i]);save();render()}
 function nextSound(){const s=ui.soundDrill;if(!s||!s.feedback)return;s.feedback=null;s.options=null;s.index++;if(s.index>=s.ids.length){state.soundHistory.push({date:dateKey(),ids:s.ids,correct:s.answers.filter(x=>x.correct).length,total:s.ids.length});state.soundHistory=state.soundHistory.slice(-100);markActivity('listen');save()}render()}
 function soundHistoryPanel(){const hist=(state.soundHistory||[]).slice(-5).reverse();return !hist.length?`<div class="card"><p class="micro">完成首次练习后显示最近成绩和进步情况。</p></div>`:hist.map((x,i)=>`<div class="card" style="margin-bottom:8px"><div class="row between"><span class="small strong">${esc(x.date)} · 听辨训练</span><span class="lesson-badge">${x.correct}/${x.total} 正确</span></div>${mkProgress(x.correct/Math.max(1,x.total)*100)}</div>`).join('')}
 function showWordLibrary(){ui.dialog=`<div class="sheet-header"><div class="sheet-title">词库查询 · ${allWords().length} 词</div><button class="close" data-action="close-dialog">✕</button></div><p class="micro">输入英文或中文关键词，查词义、发音和级别。</p><input class="input" id="libraryQuery" placeholder="例如：analyse / 分析" autocomplete="off"/><div id="libraryResults" style="margin-top:10px;max-height:55dvh;overflow:auto"></div>`;renderDialog()}
@@ -608,23 +669,29 @@ function migrateNotebook(){
   const count=Math.max(Number(m.success)||0,Number(state.vocab[m.unit]?.knownCount)||0);
   if(state.vocab[m.unit])state.vocab[m.unit].knownCount=count;
   m.success=count;
-  m.status=count>=KNOWN_TO_ARCHIVE?'mastered':'pending';
+  if(m.status!=='removed')m.status='pending'; // Preserve deliberate removal during legacy migration.
  }
  state.fsrsMigration=1;save();
+}
+// Practice scores must NEVER implicitly create FSRS cards or enroll words.
+function recordPracticeError(kind,unit,detail){
+ state.practiceErrors=state.practiceErrors||{};const key=kind+':'+unit;const old=state.practiceErrors[key]||{};
+ state.practiceErrors[key]={kind,unit,detail:String(detail||'').slice(0,160),count:(Number(old.count)||0)+1,last:new Date().toISOString()};
 }
 function upsertMistake(kind,unit,q,detail,metadata={}){
  state.mistakes=state.mistakes||{};state.mistakeEvents=state.mistakeEvents||[];
  const id=errorKey(kind,unit,q),old=state.mistakes[id]||{};
  const now=new Date().toISOString(),isWord=WORD_KINDS.has(kind);
- if(isWord){reviewMemory(unit,false)}
+ if(isWord && metadata.enrollment==='manual'){reviewMemory(unit,false)}
  const n=isWord?(state.vocab[unit]?.knownCount||0):0;
- state.mistakes[id]={...old,kind:old.kind||kind,unit,q,detail,source:metadata.source||old.source||(kind==='readingword'?'名著点词':'站内训练'),bookId:metadata.bookId||old.bookId||'',sentence:metadata.sentence||old.sentence||'',sentenceZh:metadata.sentenceZh||old.sentenceZh||'',seen:(Number(old.seen)||0)+1,success:isWord?n:0,status:'pending',first:old.first||now,last:now,dueAt:isWord?state.vocab[unit]?.dueAt||now:old.dueAt||now};
+ state.mistakes[id]={...old,kind:old.kind||kind,unit,q,detail,source:metadata.source||old.source||(kind==='readingword'?'名著点词':'站内训练'),bookId:metadata.bookId||old.bookId||'',sentence:metadata.sentence||old.sentence||'',sentenceZh:metadata.sentenceZh||old.sentenceZh||'',seen:(Number(old.seen)||0)+1,success:isWord?n:0,status:metadata.enrollment==='manual'?'pending':old.status||'pending',enrollment:metadata.enrollment==='manual'?'manual':old.enrollment||'legacy',first:old.first||now,last:now,dueAt:isWord?state.vocab[unit]?.dueAt||old.dueAt||now:old.dueAt||now,origins:metadata.bookId||metadata.sentence?PipiReviewLogic.appendOrigin(old,{...metadata,title:metadata.source}):old.origins||[]};
+ if(isWord&&metadata.enrollment==='manual'&&state.vocab[unit]){state.vocab[unit].reviewPaused=false;delete state.vocab[unit]._pipiLegacyPaused;}
  state.mistakeEvents.push({id,kind,unit,at:now,source:metadata.source||state.mistakes[id].source,bookId:metadata.bookId||'',detail:String(detail??'').slice(0,100)});
  return id;
 }
 function healMistake(kind,unit,q){
  const id=errorKey(kind,unit,q),it=state.mistakes?.[id],isWord=WORD_KINDS.has(kind);
- if(isWord){const memo=reviewMemory(unit,true);if(it){it.success=memo.knownCount;it.dueAt=memo.dueAt;it.last=new Date().toISOString();if(memo.knownCount>=KNOWN_TO_ARCHIVE){it.status='mastered';it.masteredAt=it.last}else{it.status='pending'}}return memo}
+ if(isWord){if(!isNotebookWord(it))return null;const memo=reviewMemory(unit,true);it.success=memo.knownCount;it.dueAt=memo.dueAt;it.last=new Date().toISOString();it.status='pending';delete it.masteredAt;return memo}
  if(!it)return null;
  it.success=(Number(it.success)||0)+1;if(it.success>=2){it.status='mastered';it.masteredAt=new Date().toISOString()}return it;
 }
@@ -637,24 +704,26 @@ function activeMistakes(filter='pending'){
 }
 function myWeakness(){const ls=state.listenHistory.slice(-12),rs=state.readHistory.slice(-12);const rate=arr=>arr.length?arr.reduce((v,x)=>v+x.correct,0)/Math.max(1,arr.reduce((v,x)=>v+x.total,0)):null;const lr=rate(ls),rr=rate(rs),sound=state.testResults.filter(x=>x.type==='sound').at(-1);const voc=state.testResults.filter(x=>x.type==='vocab').at(-1);let items=[];if(lr!==null)items.push({name:'听力理解',value:lr,train:'listen',hint:'优先回听做错的问题并逐句听写'});if(rr!==null)items.push({name:'阅读定位',value:rr,train:'read',hint:'检查定位词、同义替换和未提及判断'});if(sound)items.push({name:'听词识别',value:sound.correct/sound.total,train:'listen',hint:'从听单词和短句开始，不要只背拼写'});if(voc)items.push({name:'词义识别',value:voc.correct/voc.total,train:'words',hint:'优先复习诊断中的不熟悉单词'});return items.sort((a,b)=>a.value-b.value)}
 function weakestPanel(){const weak=myWeakness();return weak.length?`<div class="card"><b class="small">当前最该加强：${esc(weak[0].name)}</b><div class="sp8"></div>${mkProgress(weak[0].value*100)}<p class="micro">近期站内练习准确率 ${Math.round(weak[0].value*100)}%，只用于安排训练，不是雅思成绩。</p><p class="small muted">${esc(weak[0].hint)}</p><button class="btn soft full" data-go-train="${weak[0].train}">现在练最弱一项 ${icon('arrow',16)}</button></div>`:`<div class="card"><b class="small">先确认基础，再精确训练</b><p class="small muted">完成一次词汇诊断、听词诊断和至少一组听力、阅读，系统就能根据结果推荐薄弱项。</p><button class="btn soft full" data-page="test">开始诊断 ${icon('arrow',16)}</button></div>`}
-function renderReview(){
- const dueIds=PipiV5.dueIds(state),allIds=Object.keys(state.vocab||{}),kind=['due','unknown','all'].includes(ui.reviewFilterV5)?ui.reviewFilterV5:'due',q=(ui.reviewQueryV5||'').trim().toLowerCase();
- const mistakes=Object.values(state.mistakes||{});
- const readerOrigins=new Map(mistakes.filter(m=>m.bookId).map(m=>[m.unit,m]));
- const unknownSet=new Set(mistakes.filter(m=>WORD_KINDS.has(m.kind)&&m.status!=='mastered').map(m=>m.unit));
- const chosen=(kind==='due'?dueIds:kind==='unknown'?[...unknownSet].filter(id=>allIds.includes(id)||state.readerWords?.[id]):allIds).filter(id=>!q||id.toLowerCase().includes(q)||String(wordById(id)?.word||'').toLowerCase().includes(q)||String(wordById(id)?.zh||'').toLowerCase().includes(q));
- return `<div class="kicker">04 / SPACED REPETITION</div><h1 class="title">复习，让记忆留下来</h1><p class="subtitle">今日到期完全来自 FSRS 到期队列；词书单词、阅读点词、听写漏词统一进入同一个生词本与复习流。</p>
- <div class="v5-review-feature"><div><span>今日到期</span><strong>${dueIds.length}</strong><small>FSRS 智能推送 · 按到期时间排序</small></div><span class="v5-review-orb">↻</span></div>
- <div class="v5-review-filters">${[['due','今日到期'],['unknown','生词本'],['all','全部']].map(([k,t])=>`<button data-v5-filter="${k}" class="${kind===k?'active':''}">${t}</button>`).join('')}</div><input class="input" id="v5Search" value="${esc(ui.reviewQueryV5||'')}" placeholder="搜索英文或中文意思" autocomplete="off"/>
- <div class="v5-section-label"><h2>${kind==='due'?'FSRS 今日到期':kind==='unknown'?'生词本（含阅读生词）':'所有进入复习的单词'}</h2><span>${chosen.length} 个</span></div>
- <div class="v5-review-list">${chosen.length?chosen.sort((a,b)=>String(state.vocab[a]?.dueAt||'').localeCompare(String(state.vocab[b]?.dueAt||''))).slice(0,200).map(id=>{const w=wordById(id),m=readerOrigins.get(id);const name=w?.word||id.replace(/^lex:/,'');const source=m?.source||(state.readerWords?.[id]?'阅读点词':'词书学习');return `<button class="v5-review-item" data-v5-review-id="${esc(id)}"><span><b>${esc(name)}</b><small>${esc((w?.zh||'未加载词义，打开词书后可查看').slice(0,64))}</small><small>来源：${esc(source)}</small></span><span>${kind==='unknown'?'加入生词本':dueLabel(state.vocab[id])} ›</span></button>`}).join(''):'<div class="card center" style="padding:32px 16px">这里暂无符合条件的单词，继续阅读或背单词就会积累。</div>'}</div>${chosen.length>200?'<p class="micro">为保证手机性能，仅展示前200条；可搜索指定单词。</p>':''}`;
-}
+// Three tabs share ONE enrollment truth; view-only legacy imports remain visible in 全部.
+const REVIEW_PAGE_SIZE=70;
+// Cached search text is stable between lexical edits; each review row can be
+// queried without rebuilding the long source/translation string on every keystroke.
+const pipiReviewSearchIndex=new Map();
+function reviewSearchText(row){const id=row.id,word=wordById(id),m=row.item;const stamp=[word?.word,word?.zh,m?.source,(m?.origins||[]).length,m?.updatedAt].join('|');const cached=pipiReviewSearchIndex.get(id);if(cached?.stamp===stamp)return cached.text;const text=[id,word?.word,word?.zh,m?.source,...(m?.origins||[]).flatMap(o=>[o.title,o.sentence])].join(' ').toLowerCase();pipiReviewSearchIndex.set(id,{stamp,text});return text;}
+let pipiReviewSearchTimer=null;
+function scheduleReviewSearch(){if(pipiReviewSearchTimer)clearTimeout(pipiReviewSearchTimer);pipiReviewSearchTimer=setTimeout(()=>{pipiReviewSearchTimer=null;updateReviewList(true)},130);}
+function reviewRows(){const tab=['due','unknown','all'].includes(ui.reviewFilterV5)?ui.reviewFilterV5:'due';const q=String(ui.reviewQueryV5||'').trim().toLowerCase();const rows=PipiReviewLogic.list(state,tab).filter(row=>{if(!q)return true;return reviewSearchText(row).includes(q)});if(tab==='all')rows.sort((a,b)=>String(wordById(a.id)?.word||a.id).localeCompare(String(wordById(b.id)?.word||b.id),'en'));return rows;}
+function reviewRowHTML(row,tab){const id=row.id,m=row.item,w=wordById(id),name=w?.word||id.replace(/^lex:/,'');const source=(m.origins||[]).map(o=>o.title).filter(Boolean).slice(0,2).join('、')||m.source||(state.readerWords?.[id]?'原著阅读':'词书');const isDue=tab==='due';return `<button class="v5-review-item" data-v5-review-id="${esc(id)}"><span><b>${esc(name)}</b>${w?.phonetic?`<small>${esc(w.phonetic)}</small>`:''}${isDue?'<small class="v5-review-hidden-answer">释义将在复习卡片中揭示</small>':`<small>${esc(String(w?.zh||'可点开加载离线释义').slice(0,65))}</small>`}<small>来源：${esc(source)}</small></span><span>${isDue?'立即复习':tab==='unknown'?dueLabel(state.vocab[id]):m.enrollment==='legacy'?'待确认收录':m.status==='removed'?'已移除':'已收录'} ›</span></button>`}
+function updateReviewList(reset=false){const el=document.getElementById('pipiReviewItems');if(!el)return;const viewport=document.getElementById('viewport'),oldTop=viewport?.scrollTop||0;if(reset)ui.reviewShown=REVIEW_PAGE_SIZE;const rows=reviewRows(),tab=ui.reviewFilterV5||'due',n=Math.min(rows.length,ui.reviewShown||REVIEW_PAGE_SIZE);el.innerHTML=rows.length?rows.slice(0,n).map(r=>reviewRowHTML(r,tab)).join(''):'<div class="card center" style="padding:32px 16px">这里暂无符合条件的单词。</div>';
+ const count=document.getElementById('pipiReviewCount');if(count)count.textContent=rows.length+' 个';const more=document.getElementById('pipiReviewMore');if(more){more.hidden=n>=rows.length;more.textContent=`继续加载（已显示 ${n}/${rows.length}）`}if(viewport)viewport.scrollTop=oldTop}
+function loadMoreReview(){ui.reviewShown=(ui.reviewShown||REVIEW_PAGE_SIZE)+REVIEW_PAGE_SIZE;updateReviewList()}
+function renderReview(){const due=PipiReviewLogic.dueIds(state).length,tab=['due','unknown','all'].includes(ui.reviewFilterV5)?ui.reviewFilterV5:'due';const rows=reviewRows(),n=Math.min(rows.length,ui.reviewShown||REVIEW_PAGE_SIZE);return `<div class="kicker">04 / SPACED REPETITION</div><h1 class="title">复习，让记忆留下来</h1><p class="subtitle">只在主动选择「不会」后加入 FSRS；练习答错不会自动收录。旧版来源无法确认的记录保留在「全部」，由你决定是否重新加入。</p><div class="v5-review-feature"><div><span>今日到期</span><strong>${due}</strong><small>FSRS 根据记忆稳定度安排复习</small></div><span class="v5-review-orb">↻</span></div><div class="v5-review-filters">${[['due','今日到期'],['unknown','生词本'],['all','全部']].map(([k,t])=>`<button data-v5-filter="${k}" class="${tab===k?'active':''}">${t}</button>`).join('')}</div><input class="input" id="v5Search" value="${esc(ui.reviewQueryV5||'')}" placeholder="搜索英文、释义或原句" autocomplete="off"/><div class="v5-section-label"><h2>${tab==='due'?'今日到期 · 先回忆后揭示':tab==='unknown'?'主动收录的生词 · 最新在前':'全部记录 · 含待确认的旧记录'}</h2><span id="pipiReviewCount">${rows.length} 个</span></div><div class="v5-review-list" id="pipiReviewItems">${rows.length?rows.slice(0,n).map(r=>reviewRowHTML(r,tab)).join(''):'<div class="card center" style="padding:32px 16px">这里暂无符合条件的单词。</div>'}</div><button class="btn ghost full" id="pipiReviewMore" data-action="v5-review-more" ${n>=rows.length?'hidden':''}>继续加载（已显示 ${n}/${rows.length}）</button>`}
 
 function reviewOne(id){const m=state.mistakes?.[id];if(!m){toast('没有找到这条记录');return}
  if(WORD_KINDS.has(m.kind)){
   const w=wordById(m.unit);if(!w){toast('此词目前未加载，请先打开对应词库');return}
   ui.reviewId=id;
-  ui.dialog=`<div class="sheet-header"><div class="sheet-title">FSRS 生词复习</div><button class="close" data-action="close-dialog">✕</button></div><p class="subtitle">先在脑中回忆意思，再显示答案。只需选择「不会 / 会」，系统自动计算下次出现时间。</p><h2 class="qword">${esc(w.word)} <button class="textbtn" data-action="review-say" aria-label="播放读音">${icon('volume',18)}</button></h2>${m.sentence?`<div class="reader-context">${esc(m.sentence)}</div>`:''}<div class="review-recall"><button class="btn full" data-action="review-reveal">显示释义并自评</button><div id="reviewMeaning" class="review-meaning hide"><b>${esc(w.zh)}</b>${w.example?`<p class="micro">${esc(w.example)}</p>`:''}<div class="binary-actions"><button class="binary-grade unknown" data-action="review-self-fail">不会<small>再安排复习</small></button><button class="binary-grade known" data-action="review-self-known">会<small>智能延长间隔</small></button></div></div></div><p class="micro">这张生词卡已累计「会」${Number(m.success)||0} 次；累计7次会标记为熟悉，但仍按FSRS安排到期复习。</p>`;
+  ui.dialog=`<div class="sheet-header"><div class="sheet-title">FSRS 生词复习</div><button class="close" data-action="close-dialog">✕</button></div><p class="subtitle">先在脑中回忆意思，再显示答案。只需选择「不会 / 会」，系统自动计算下次出现时间。</p><h2 class="qword">${esc(w.word)} <button class="textbtn" data-action="review-say" aria-label="播放读音">${icon('volume',18)}</button></h2>${m.sentence?`<div class="reader-context">${esc(m.sentence)}</div>`:''}<div class="review-recall"><button class="btn full" data-action="review-reveal">显示释义并自评</button><div id="reviewMeaning" class="review-meaning hide"><b>${esc(w.zh)}</b>${w.example?`<p class="micro">${esc(w.example)}</p>`:''}<div class="binary-actions"><button class="binary-grade unknown" data-action="review-self-fail">不会<small>再安排复习</small></button><button class="binary-grade known" data-action="review-self-known">会<small>智能延长间隔</small></button></div></div></div><p class="micro">这张生词卡已累计答「会」${Number(m.success)||0} 次；FSRS 会根据记忆稳定度安排下次复习，不会因为答对次数自动移出生词本。</p>`;
   renderDialog();return;
  }
  if(m.kind==='listen'){ui.lesson=Number(m.unit);ui.answers={};ui.lessonSubmitted=false;ui.transcript=false;showPage('train','listen')}
@@ -684,7 +753,7 @@ function renderClickableSentence(sentence,b,ch,p){return esc(sentence).replace(/
   return `<button type="button" class="word-token ${flagged?'marked':''}" data-reader-word="${esc(token.toLowerCase())}" data-reader-p="${p}" aria-label="查询单词 ${esc(token)}">${token}</button>`
  })}
 function renderLiterature(){ui.readerBookId=null;return renderBookShelf()}
-function renderBookShelf(){let saved={};try{saved=JSON.parse(localStorage.getItem('sprint7_originals_progress')||'{}')}catch(e){}
+function renderBookShelf(){const saved=currentOriginalProgress();
  return `<div class="kicker">02 / ENGLISH CLASSICS</div><h1 class="title">读喜欢的书，学遇见的词</h1><p class="subtitle">共20本公版英文原著 · 当前已安装 ${window.PipiAssetStatus?.installedBooks?.length??OriginalBooks.length} 本 · 上下滑动连续阅读 · 点词查义 · 续读。</p>
  <div class="v5-library-grid">${OriginalBooks.map(b=>{const p=saved[b.id],installed=!window.PipiAssetStatus||window.PipiAssetStatus.installedBooks.includes(b.id);return `<a class="v5-literature-card ${installed?'':'unavailable'}" ${installed?'href="./originals-reader.html?book='+encodeURIComponent(b.id)+'"':'aria-disabled="true"'}><span class="v5-literature-cover" style="--book-accent:${esc(b.accent)}">${esc(b.emoji)}<small>${esc(b.enTitle)}</small></span><span class="v5-literature-detail"><b>${esc(b.zhTitle)}</b><small>${esc(b.author)}</small><span>${!installed?'离线素材待补齐':p?`已读至第 ${Number(p.chapter||0)+1} 章 · 继续阅读`:'开始阅读'} ${installed?'→':''}</span></span></a>`}).join('')}</div>
  <div class="note">阅读器从安装包内读取原文。单击单词仅查询，不自动添加为生词；点击“不会”才计入复习。</div>`;
@@ -703,7 +772,7 @@ function showReaderWord(token,pindex){const b=getReaderBook(ui.readerBookId);if(
 }
 function saveReaderMarkedWord(){const v=ui.readerSelection;if(!v)return;state.readerWords=state.readerWords||{};
  state.readerWords[v.id]={id:v.id,word:v.word,zh:v.zh,level:v.level,topic:'名著点词',example:v.sentence,book:'reader'};
- upsertMistake('readingword',v.id,0,'主动标记不会',{source:'《'+(getReaderBook(v.bookId)?.zhTitle||'经典阅读')+'》点词',bookId:v.bookId,sentence:v.sentence,sentenceZh:v.sentenceZh});
+ upsertMistake('readingword',v.id,0,'主动标记不会',{source:'《'+(getReaderBook(v.bookId)?.zhTitle||'经典阅读')+'》点词',bookId:v.bookId,sentence:v.sentence,sentenceZh:v.sentenceZh,enrollment:'manual'});
  // Put novel-marked words into the active spaced-repetition queue as well.
  if(!state.vocab[v.id])state.vocab[v.id]={reps:0,interval:1,ease:2.5,lapses:1,due:dateKey(),last:dateKey()};
  save();ui.dialog=null;render();toast(`已收录“${v.word}” · 可在错词本查看并复习`)
@@ -723,12 +792,18 @@ async function pipiReviewOpen(id){
  }
  pipiReview(id);
 }
-function pipiReview(id){const w=wordById(id),m=state.vocab?.[id];if(!m){toast('该单词未在学习记录中');return}if(!w||!w.zh||/^(?:待查释义|暂无|未找到)/.test(w.zh)){toast('这张词卡暂无准确中文释义，可从词书或原著离线词典查找');return}
- ui.v5ReviewId=id;ui.dialog=`<div class="sheet-header"><div class="sheet-title">间隔复习</div><button class="close" data-action="close-dialog">✕</button></div><p class="micro">先在心里想一想，再揭示答案。来源：${esc((Object.values(state.mistakes||{}).find(x=>x.unit===id)?.source)||'词书学习')}</p><h2 class="qword">${esc(w.word)} <button class="textbtn" data-action="v5-speak">${icon('volume',18)}</button></h2><button class="btn full" id="pipiReveal" data-action="v5-reveal">显示释义</button><div id="pipiReviewMeaning" class="v5-review-answer" hidden><h3>${esc(w.zh)}</h3><p>${esc(w.example||'')}</p><div class="binary-actions"><button class="binary-grade unknown" data-action="v5-review-fail">不会</button><button class="binary-grade known" data-action="v5-review-pass">会</button></div></div>`;renderDialog()}
-function pipiReviewAnswer(known){const id=ui.v5ReviewId;if(!id)return;const word=wordById(id)?.word||id;const m=state.mistakes?.[errorKey('vocab',id,0)];const before=JSON.stringify(state);if(known){if(m)healMistake(m.kind,id,0);else reviewMemory(id,true)}else upsertMistake(m?.kind||'vocab',id,0,'复习：未记住',{source:m?.source||'间隔复习'});
+function pipiReview(id){const w=wordById(id),m=state.vocab?.[id],entry=state.mistakes?.[errorKey('vocab',id,0)];if(!entry){toast('没有找到这条记录');return}if(!w||!w.zh||/^(?:待查释义|暂无|未找到)/.test(w.zh)){toast('这张词卡暂无准确中文释义，可在词书或原著离线词典查找');return}
+ ui.v5ReviewId=id;const sources=(entry.origins||[]);const extraSources=sources.length?`<details class="v5-review-sources"><summary>查看来源与原句（${sources.length}条）</summary>${sources.map(x=>`<div class="reader-context"><b>${esc(x.title||x.bookId||'原著')}</b><p>${esc(x.sentence||'')}</p>${x.sentenceZh?`<p>${esc(x.sentenceZh)}</p>`:''}</div>`).join('')}</details>`:entry.sentence?`<details><summary>查看原句</summary><p>${esc(entry.sentence)}</p></details>`:'';
+ const legacy=entry.enrollment==='legacy',removed=entry.status==='removed',manual=PipiReviewLogic.enrolled(entry);
+ ui.dialog=`<div class="sheet-header"><div class="sheet-title">${legacy?'历史单词 · 待确认':'FSRS 间隔复习'}</div><button class="close" data-action="close-dialog">✕</button></div><p class="micro">${legacy?'旧记录收录方式不明确；可主动确认加入，不会清零历史记忆数据。':removed?'此词已由你移出生词本。':'先回忆意思，再揭示释义，FSRS 自动计算下次复习日期。'}</p><h2 class="qword">${esc(w.word)} <button class="textbtn" data-action="v5-speak">${icon('volume',18)}</button></h2>${extraSources}<button class="btn full" id="pipiReveal" data-action="v5-reveal">显示释义</button><div id="pipiReviewMeaning" class="v5-review-answer" hidden><h3>${esc(w.zh)}</h3><p>${esc(w.example||'')}</p>${manual?`<div class="binary-actions"><button class="binary-grade unknown" data-action="v5-review-fail">不会</button><button class="binary-grade known" data-action="v5-review-pass">会</button></div><p class="micro">下次复习：${esc(dueLabel(m))}</p>`:''}</div><div class="sp12"></div>${manual?'<button class="btn ghost full" data-action="v5-review-remove">主动移出生词本</button>':'<button class="btn soft full" data-action="v5-review-enroll">确认「不会」· 加入 FSRS 生词本</button>'}`;renderDialog()}
+function pipiReviewAnswer(known){const id=ui.v5ReviewId,entry=state.mistakes?.[errorKey('vocab',id,0)];if(!id||!PipiReviewLogic.enrolled(entry))return;const word=wordById(id)?.word||id;const before=JSON.stringify(state);if(known)healMistake(entry.kind,id,0);else upsertMistake(entry.kind,id,0,'复习：未记住',{source:entry.source,bookId:entry.bookId,sentence:entry.sentence,sentenceZh:entry.sentenceZh,enrollment:'manual'});
  PipiV5.addEvent(state,{type:'review_done',wordId:id,verdict:known?'good':'again'});const d=dateKey();state.dayReviews[d]||={reviews:0,new:0};state.dayReviews[d].reviews++;
  if(!save(true)){state=JSON.parse(before);toast('存储失败，作答未保存');return}
- ui.v5ReviewId=null;ui.dialog=null;render();toast(`「${word}」已复习 · ${known?'会':'不会'}`)}
+ const queue=ui.v5ReviewQueue||[],pos=queue.indexOf(id);if(pos>=0)queue.splice(pos,1);
+ const next=queue.find(x=>PipiReviewLogic.enrolled(state.mistakes?.[errorKey('vocab',x,0)]));
+ ui.v5ReviewId=null;ui.dialog=null;render();if(next){pipiReviewOpen(next)}else{ui.v5ReviewQueue=null;toast(`「${word}」已复习，今日队列已完成`)}}
+function pipiReviewRemove(){const id=ui.v5ReviewId,entry=state.mistakes?.[errorKey('vocab',id,0)];if(!PipiReviewLogic.enrolled(entry))return;if(!confirm('确认将该词移出生词本？学习历史保留在「全部」，可再次手动收录。'))return;const before=JSON.stringify(state);entry.status='removed';entry.enrollment='removed';if(state.vocab[id])state.vocab[id].reviewPaused=true;if(!save(true)){state=JSON.parse(before);toast('移除保存失败');return}ui.v5ReviewQueue=null;ui.v5ReviewId=null;ui.dialog=null;render();toast('已移出生词本，历史保留在全部')}
+function pipiReviewEnroll(){const id=ui.v5ReviewId,entry=state.mistakes?.[errorKey('vocab',id,0)];if(!entry)return;const before=JSON.stringify(state);entry.enrollment='manual';entry.status='pending';if(!state.vocab[id])reviewMemory(id,false);else {state.vocab[id].reviewPaused=false;delete state.vocab[id]._pipiLegacyPaused;}if(!save(true)){state=JSON.parse(before);toast('加入保存失败');return}ui.dialog=null;render();pipiReviewOpen(id);toast('已由你主动加入生词本')}
 function pipiNavBack(){
  flushWordListProgress();
  if(ui.dialog){ui.dialog=null;renderDialog();return true}
@@ -753,13 +828,19 @@ document.addEventListener('click',e=>{
   window.PipiWebNavigation?.recordDepart?.('index.html?nav='+encodeURIComponent(ui.page));}catch(_){}
 },true);
 // A single event dispatcher keeps all generated screens interactive.
-document.addEventListener('click',e=>{const target=e.target.closest('[data-action],[data-page],[data-training],[data-go-train],[data-grade],[data-review],[data-review-answer],[data-sound-choice],[data-word-say],[data-stage-answer],[data-quiz-answer],[data-book],[data-book-answer],[data-listen-answer],[data-read-answer],[data-rate],[data-reader-book],[data-reader-word],[data-review-filter],[data-v5-filter],[data-v5-review-id]');if(!target)return;if(target.classList.contains('overlay')&&e.target.closest('.sheet'))return;
-if(target.dataset.v5Filter){ui.reviewFilterV5=target.dataset.v5Filter;render();return}
-if(target.dataset.v5ReviewId){pipiReviewOpen(target.dataset.v5ReviewId);return}
+document.addEventListener('click',async e=>{const target=e.target.closest('[data-speaking-recording],[data-writing-history-id],[data-action],[data-page],[data-training],[data-go-train],[data-grade],[data-review],[data-review-answer],[data-sound-choice],[data-word-say],[data-stage-answer],[data-quiz-answer],[data-book],[data-book-answer],[data-listen-answer],[data-read-answer],[data-rate],[data-reader-book],[data-reader-word],[data-review-filter],[data-v5-filter],[data-v5-review-id]');if(!target)return;if(target.classList.contains('overlay')&&e.target.closest('.sheet'))return;
+if(target.dataset.v5Filter){ui.reviewTabScroll=ui.reviewTabScroll||{};ui.reviewTabScroll[ui.reviewFilterV5||'due']=document.getElementById('viewport')?.scrollTop||0;ui.reviewFilterV5=target.dataset.v5Filter;ui.reviewShown=REVIEW_PAGE_SIZE;ui.v5ReviewQueue=null;render();const viewport=document.getElementById('viewport');if(viewport)viewport.scrollTop=ui.reviewTabScroll[ui.reviewFilterV5]||0;return}
+if(target.dataset.v5ReviewId){if((ui.reviewFilterV5||'due')==='due')ui.v5ReviewQueue=reviewRows().map(row=>row.id).filter(id=>PipiReviewLogic.enrolled(state.mistakes?.[errorKey('vocab',id,0)]));else ui.v5ReviewQueue=null;pipiReviewOpen(target.dataset.v5ReviewId);return}
 if(target.dataset.readerBook){openReaderBook(target.dataset.readerBook);return}
 if(target.dataset.readerWord){showReaderWord(target.dataset.readerWord,Number(target.dataset.readerP));return}
 if(target.dataset.reviewFilter){ui.reviewFilter=target.dataset.reviewFilter;render();return}
 if(target.dataset.book){flushWordListProgress();if(target.dataset.book==='basic'){ui.dialog=null;ui.bookStudyOpen=true;state.wordStudyModes=state.wordStudyModes||{};state.wordStudyModes.basic='list';state.wordBook='basic';state.wordGoal=PipiV5.bookGoal(state,'basic');state.wordLevel='adaptive';state.wordTopic='all';ui.bookQuiz=null;ui.wordId=null;ui.flipOverride=null;ui.flip=false;save();render();toast('已切换基础词库')}else{loadSelectedBook(target.dataset.book)}return}
+if(target.dataset.speakingRecording){const id=target.dataset.speakingRecording;try{
+ const blob=await PipiSpeakingArchive.get(id);if(!blob){toast('本机录音未找到，可能已被系统清理');return}
+ if(ui.archiveAudioUrl)URL.revokeObjectURL(ui.archiveAudioUrl);
+ ui.archiveAudioUrl=URL.createObjectURL(blob);ui.dialog=`<div class="sheet-header"><div class="sheet-title">历史口语录音</div><button class="close" data-action="close-dialog">✕</button></div><audio controls autoplay style="width:100%" src="${ui.archiveAudioUrl}"></audio><p class="micro">录音保存在本机，重要内容请及时另存文件。</p>`;render();
+ }catch(e){console.error(e);toast('无法打开录音：'+e.message)}return}
+if(target.dataset.writingHistoryId){const row=(state.writingHistory||[]).find(x=>x.id===target.dataset.writingHistoryId);if(row?.text){ui.dialog=`<div class="sheet-header"><div class="sheet-title">${esc(row.date)} · 历史作文</div><button class="close" data-action="close-dialog">✕</button></div><p class="micro">${Number(row.wordCount)||0} words · 独立保存的原文</p><div class="script-box" style="max-height:65dvh;overflow:auto;white-space:pre-wrap">${esc(row.text)}</div>`;render()}return}
 if(target.dataset.bookAnswer!==undefined){bookQuizChoose(Number(target.dataset.bookAnswer));return}
 if(target.dataset.page){flushWordListProgress();stopSpeak();if(ui.recording)stopRecorder(true);showPage(target.dataset.page);if(target.dataset.scrollRes)setTimeout(()=>document.getElementById('resources')?.scrollIntoView({behavior:'smooth',block:'start'}),50);return}
 if(target.dataset.goTrain){flushWordListProgress();stopSpeak();showPage('train',target.dataset.goTrain);return}
@@ -780,10 +861,31 @@ if(e.target.id==='wordLevelFilter'||e.target.id==='wordTopicFilter'||e.target.id
 if(e.target.id==='listenPicker'||e.target.id==='readPicker'){const k=e.target.id==='listenPicker'?'lesson':'reading';ui[k]=Number(e.target.value);if(k==='lesson'){ui.answers={};ui.lessonSubmitted=false;ui.transcript=false;ui.dictationIndex=0;ui.dictationResult=null}else{ui.readingAnswers={};ui.readingSubmitted=false}render(true);return}
 if(e.target.id==='speakingPicker'){ui.speak=Number(e.target.value);ui.recordBlob=null;ui.audioUrl=null;ui.recordSeconds=0;render(true);return}
 if(e.target.id==='writingPicker'){ui.write=Number(e.target.value);render(true);return}
-if(e.target.id==='v5Search'){ui.reviewQueryV5=e.target.value;render();const n=document.getElementById('v5Search');if(n){n.focus();n.setSelectionRange(e.target.selectionStart||0,e.target.selectionStart||0)}return}if(e.target.id==='mistakeSearch'){ui.reviewQuery=e.target.value;render();return}if(e.target.id==='guessBox')ui.quizGuess=e.target.checked;if(e.target.dataset.rubric)ui['r_'+e.target.dataset.rubric]=e.target.checked;if(e.target.dataset.writeRubric)ui['w_'+e.target.dataset.writeRubric]=e.target.checked;if(e.target.id==='restoreFile'&&e.target.files?.[0]){location.href='./backup.html';return}});
-document.addEventListener('input',e=>{if(e.target.id==='mistakeSearch'){ui.reviewQuery=e.target.value;const q=e.target.value.toLowerCase().trim();document.querySelectorAll('.review-entry').forEach(el=>{el.style.display=!q||el.textContent.toLowerCase().includes(q)?'':'none'});return}if(e.target.id==='libraryQuery'){searchWords(e.target.value);return}if(e.target.id==='writingInput'){state.writingDrafts[ui.write]=e.target.value;save();const n=wordsOf(e.target.value).length,need=writing[ui.write].min;const count=document.getElementById('writing-count'),meter=document.getElementById('writing-meter');if(count)count.textContent=`${n} words`;if(meter)meter.style.width=`${clamp(n/need*100,0,100)}%`}});
+if(e.target.id==='v5Search'){return}if(e.target.id==='mistakeSearch'){ui.reviewQuery=e.target.value;render();return}if(e.target.id==='guessBox')ui.quizGuess=e.target.checked;if(e.target.dataset.rubric)ui['r_'+e.target.dataset.rubric]=e.target.checked;if(e.target.dataset.writeRubric)ui['w_'+e.target.dataset.writeRubric]=e.target.checked;if(e.target.id==='restoreFile'&&e.target.files?.[0]){location.href='./backup.html';return}});
+document.addEventListener('input',e=>{if(e.target.id==='v5Search'){ui.reviewQueryV5=e.target.value;scheduleReviewSearch();return}if(e.target.id==='mistakeSearch'){ui.reviewQuery=e.target.value;const q=e.target.value.toLowerCase().trim();document.querySelectorAll('.review-entry').forEach(el=>{el.style.display=!q||el.textContent.toLowerCase().includes(q)?'':'none'});return}if(e.target.id==='libraryQuery'){searchWords(e.target.value);return}if(e.target.id==='writingInput'){state.writingDrafts[ui.write]=e.target.value;scheduleWritingDraft();const n=wordsOf(e.target.value).length,need=writing[ui.write].min;const count=document.getElementById('writing-count'),meter=document.getElementById('writing-meter');if(count)count.textContent=`${n} words`;if(meter)meter.style.width=`${clamp(n/need*100,0,100)}%`}});
 // Import and recovery are handled only on backup.html with validated rollback.
 migrateNotebook();
+// One-time, non-destructive cleanup of old seven-times-"mastered" word entries.
+// Keep their existing FSRS stability/difficulty/dueAt unchanged.
+function migrateNotebookMembership(){
+ if(state.notebookMembershipVersion===2)return;
+ const before=JSON.stringify(state);
+ for(const m of Object.values(state.mistakes||{})){
+  if(!m||!WORD_KINDS.has(m.kind)||m.status!=='mastered')continue;
+  m.status='pending';delete m.masteredAt;
+ }
+ state.notebookMembershipVersion=2;
+ if(!save(true)){state=JSON.parse(before);console.warn('生词本旧状态迁移未保存，下次启动重试')}
+}
+migrateNotebookMembership();
+// One-time non-destructive classification: legacy automatic entries are viewable in 全部,
+// but not silently scheduled as manually collected unknown words.
+function migrateReviewEntries(){if(state.reviewEnrollmentVersion===1)return;
+ const snapshot=JSON.stringify(state);
+ PipiReviewLogic.normalize(state);state.reviewEnrollmentVersion=1;
+ if(!save(true)){state=JSON.parse(snapshot);console.warn('复习收录迁移失败，下次重试')}
+}
+migrateReviewEntries();
 // Restores the last top-level module after opening a separate HTML screen.
 try{const requested=new URLSearchParams(location.search).get('nav');
  if(['today','train','library','review','me','metrics','test','plan'].includes(requested))ui.page=requested;
@@ -798,3 +900,6 @@ requestAnimationFrame(()=>{const pos=pipiScrollByPage.get(pipiPageKey());if(Numb
 if(activeBook()!=='basic'){SprintBooks.load(activeBook()).then(()=>{if(ui.page==='train'&&ui.training==='words'&&!document.getElementById('pipiVirtualList'))render()}).catch(()=>{if(ui.page==='train'&&ui.training==='words'&&!document.getElementById('pipiVirtualList'))render()})}
 
 window.PipiNavigationDebug={back:pipiNavBack,history:pipiNavHistory,scroll:pipiScrollByPage};
+
+// The virtual-sized list is appended in batches; no 200-card hard cap.
+(function(){const viewport=document.getElementById('viewport');if(!viewport)return;viewport.addEventListener('scroll',()=>{if(ui.page!=='review'||!document.getElementById('pipiReviewMore')||document.getElementById('pipiReviewMore').hidden)return;if(viewport.scrollTop+viewport.clientHeight+440>=viewport.scrollHeight)loadMoreReview()},{passive:true});})();

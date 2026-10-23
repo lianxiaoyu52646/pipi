@@ -3,8 +3,31 @@
 const $=id=>document.getElementById(id), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const KEY='sprint7_complete_v1';
 let current=null, requestNo=0, timer=null;
-function state(){try{return JSON.parse(localStorage.getItem(KEY))||{}}catch{return {}}}
-function persist(s){try{localStorage.setItem(KEY,JSON.stringify(s));return true}catch{return false}}
+function valid(raw){try{const s=JSON.parse(raw);return s?.settingsVersion===1&&s.vocab&&typeof s.vocab==='object'&&s.dayTasks&&typeof s.dayTasks==='object'}catch(_){return false}}
+function revision(raw){try{return Math.max(0,Number(JSON.parse(raw)._pipiRevision)||0)}catch(_){return 0}}
+function latestRaw(){const local=localStorage.getItem(KEY),android=window.SprintAndroid;let native='';
+ try{native=android?.getLearningStateFromSQLite?.()||''}catch(e){console.warn('读取SQLite失败',e)}
+ if(valid(native)&&(!valid(local)||revision(native)>revision(local)))return native;
+ if(valid(local))return local;
+ if(local||native)throw Error('学习记录校验失败，请先在数据备份页恢复，禁止覆盖');
+ return '';
+}
+function state(){const raw=latestRaw();return raw?JSON.parse(raw):{settingsVersion:1,vocab:{},mistakes:{},readerWords:{},dayTasks:{},mistakeEvents:[]}}
+function persist(s){try{
+ const before=latestRaw(),expected=revision(before);
+ // If another page saved in the meantime, never silently overwrite newer records.
+ if((Number(s._pipiRevision)||0)!==expected)throw Error('其他页面更新了学习记录，请重新打开词条再操作');
+ s._pipiRevision=expected+1;const raw=JSON.stringify(s),android=window.SprintAndroid;
+ if(android){
+  const commit=android.saveLearningStateIfRevision;
+  if(typeof commit==='function'){if(!commit.call(android,raw,expected))throw Error('SQLite版本冲突或保存失败，请重新打开词条');}
+  else if(!android.saveLearningStateToSQLite?.(raw))throw Error('SQLite保存失败');
+ }
+ try{localStorage.setItem(KEY,raw)}catch(e){if(!android)throw e;console.warn('SQLite保存成功，但浏览器镜像延迟',e)}
+ window.PipiStateSafety?.schedule?.(raw,true);
+ return true;
+ }catch(e){console.error('离线词典记录保存失败',e);alert('学习记录未保存：'+e.message);return false}}
+
 function history(){try{return JSON.parse(localStorage.getItem('sprint7_ecdict_recent')||'[]')}catch{return []}}
 function record(word){const h=[word,...history().filter(w=>w!==word)].slice(0,12);localStorage.setItem('sprint7_ecdict_recent',JSON.stringify(h));drawRecent()}
 function drawRecent(){const h=history();$('recentSection').hidden=!h.length;$('recentWords').innerHTML=h.map(w=>`<button data-word="${esc(w)}">${esc(w)}</button>`).join('')}
@@ -27,18 +50,27 @@ async function search(w){
 }
 function review(known){
  if(!current)return;
- const word=current.query,unit='lex:'+word,s=state();s.settingsVersion=1;s.vocab=s.vocab||{};s.mistakes=s.mistakes||{};s.readerWords=s.readerWords||{};s.mistakeEvents=s.mistakeEvents||[];
- const id='word:'+unit+':0',entry=s.mistakes[id]||{},old=s.vocab[unit]||{};
- if(known&&!s.mistakes[id]){alert('已认识的词无需加入生词本；点「不会」后才加入复习队列。');return}
- const next=window.SprintFSRS?.schedule?.(old,known)||{dueAt:new Date(Date.now()+86400000).toISOString()};
- const n=known?(Number(old.knownCount)||0)+1:0;
- s.vocab[unit]={...old,...next,knownCount:n,knownTotal:(old.knownTotal||0)+(known?1:0),lapses:(old.lapses||0)+(known?0:1)};
- s.readerWords[unit]={id:unit,word,zh:current.translation||current.definition||'待补充释义',level:'离线词典',topic:'英汉词典',example:'',book:'dictionary'};
- s.mistakes[id]={...entry,kind:'readingword',unit,q:0,detail:'离线词典查询',source:'ECDICT 离线词典',seen:(entry.seen||0)+(known?0:1),success:n,status:n>=7?'mastered':'pending',first:entry.first||new Date().toISOString(),last:new Date().toISOString(),dueAt:next.dueAt};
- if(!known)s.mistakeEvents.push({id,kind:'readingword',unit,at:new Date().toISOString(),source:'ECDICT 离线词典'});
+ const word=String(current.query||'').trim().toLowerCase(),unit='lex:'+word,id='word:'+unit+':0';
+ let s;try{s=state()}catch(e){alert(e.message);return}
+ s.vocab=s.vocab||{};s.mistakes=s.mistakes||{};s.readerWords=s.readerWords||{};s.mistakeEvents=s.mistakeEvents||[];
+ const entry=s.mistakes[id]||{},old=s.vocab[unit]||{};
+ // Only explicit 不会 creates a card; 会 on an existing active card updates FSRS.
+ const enrolled=entry.enrollment==='manual'&&entry.status!=='removed';
+ if(known&&!enrolled){alert('已认识的词无需加入生词本；只有点「不会」才创建 FSRS 生词卡。');return}
+ const next=window.SprintFSRS?.schedule?.(old,known);
+ if(!next){alert('FSRS 调度器尚未就绪，未保存');return}
+ const n=(Number(old.knownCount)||0)+(known?1:0),stamp=new Date().toISOString();
+ s.vocab[unit]={...old,...next,knownCount:n,knownTotal:(Number(old.knownTotal)||0)+(known?1:0),reps:known?(Number(old.reps)||0)+1:0,lapses:(Number(old.lapses)||0)+(known?0:1),reviewPaused:false};
+ delete s.vocab[unit]._pipiLegacyPaused;
+ const existing=s.readerWords[unit]||{};s.readerWords[unit]={id:unit,word,zh:current.translation||current.definition||'待补充释义',level:'离线词典',topic:'英汉词典',book:'dictionary',...existing};
+ const source={bookId:'dictionary',title:'ECDICT 离线词典',sentence:''};
+ const origins=Array.isArray(entry.origins)?entry.origins.slice():[];
+ if(!origins.some(o=>o.bookId==='dictionary'))origins.push(source);
+ s.mistakes[id]={...entry,kind:'readingword',unit,q:0,detail:'离线词典：主动标记不会',source:'ECDICT 离线词典',enrollment:'manual',origins:origins.slice(-40),seen:(Number(entry.seen)||0)+(known?0:1),success:n,status:'pending',first:entry.first||stamp,last:stamp,dueAt:next.dueAt};
+ if(!known)s.mistakeEvents.push({id,kind:'readingword',unit,at:stamp,source:'ECDICT 离线词典',detail:'主动标记不会'});
  if(s.mistakeEvents.length>12000)s.mistakeEvents=s.mistakeEvents.slice(-12000);
- if(!persist(s)){alert('浏览器存储已满，无法保存学习记录');return}
- const button=$(known?'known':'unknown');button.textContent=known?(n>=7?'已掌握，自动归档':`已记录 · ${n}/7次会`):'已进入 FSRS 生词本';
+ if(!persist(s))return;
+ const button=$(known?'known':'unknown');button.textContent=known?'已按 FSRS 安排下次复习':'已加入 FSRS 生词本';
 }
 $('q').addEventListener('input',e=>{clearTimeout(timer);timer=setTimeout(()=>search(e.target.value),180)});
 $('q').addEventListener('keydown',e=>{if(e.key==='Enter'){clearTimeout(timer);search(e.target.value);e.target.blur()}});

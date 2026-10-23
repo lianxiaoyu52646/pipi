@@ -1,0 +1,21 @@
+'use strict';
+const fs=require('fs'),vm=require('vm'),path=require('path'),assert=require('assert');
+const assets=path.join(__dirname,'../app/src/main/assets');
+const app=fs.readFileSync(path.join(assets,'app.js'),'utf8');
+const begin=app.indexOf('let pipiDraftTimer=null,pipiDraftDirty=false;'),end=app.indexOf('function markActivity(',begin);
+assert(begin>0&&end>begin);
+let saved=0,seq=0,timers=new Map();const win={addEventListener(){}};
+const ctx={save(){saved++;return true},window:win,document:{addEventListener(){}},setTimeout(fn){timers.set(++seq,fn);return seq},clearTimeout(id){timers.delete(id)}};
+vm.createContext(ctx);vm.runInContext(app.slice(begin,end),ctx);
+for(let i=0;i<120;i++)vm.runInContext('scheduleWritingDraft()',ctx);
+assert.equal(saved,0,'typing should not synchronously write full state');assert.equal(timers.size,1,'only one pending save');
+[...timers.values()][0]();assert.equal(saved,1,'120 keystrokes -> 1 save');
+vm.runInContext('scheduleWritingDraft();flushWritingDraft()',ctx);assert.equal(saved,2,'pagehide immediate flush');
+const books=fs.readFileSync(path.join(assets,'wordbooks.js'),'utf8');
+const sb={window:{},indexedDB:{}};vm.createContext(sb);vm.runInContext(books,sb);
+const a=[{id:'lex:abandon',word:'abandon',zh:'四级释义'}],b=[{id:'lex:abandon',word:'abandon',zh:'雅思释义'}];
+// Isolate the exported lookup's preferred-book behavior using registered source contract.
+assert.match(books,/maps\.get\(preferredBook\)\?\.has\(id\)/);
+assert.match(books,/return maps\.get\(preferredBook\)\.get\(id\)/);
+assert.match(app,/SprintBooks\.lookup\(id,activeBook\(\)\)/);
+console.log('PASS V5.12.14: writing debounce & preferred-book translation lookup');

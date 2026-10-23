@@ -40,6 +40,7 @@ internal class VoiceCacheIndex(context: Context, speaker: Int, speed: Float) :
         db.execSQL("CREATE TABLE segments (seq INTEGER PRIMARY KEY, cache_key TEXT NOT NULL, text TEXT NOT NULL, book TEXT NOT NULL, chapter INTEGER NOT NULL, chapter_index INTEGER NOT NULL, chapter_total INTEGER NOT NULL, ready INTEGER NOT NULL DEFAULT 0)")
         db.execSQL("CREATE INDEX segments_ready_seq ON segments(ready,seq)")
         db.execSQL("CREATE INDEX segments_key ON segments(cache_key)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS failures (cache_key TEXT PRIMARY KEY, attempts INTEGER NOT NULL, last_error TEXT NOT NULL, failed_at INTEGER NOT NULL, retry_after INTEGER NOT NULL)")
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         db.execSQL("DROP TABLE IF EXISTS segments")
@@ -76,6 +77,9 @@ internal class VoiceCacheIndex(context: Context, speaker: Int, speed: Float) :
     /** Returns true if an existing verified index was reused without any full file scan. */
     fun prepare(context: Context, disk: NarrationAudioCache, shouldContinue: () -> Boolean,
                 onScan: (Int, Int) -> Unit): Boolean {
+        // Existing V5.12.15 databases do not yet contain this auxiliary table.
+        // Create it BEFORE any rebuild transaction that may clear old failure rows.
+        ensureFailures()
         val expected=signature(context)
         readableDatabase.rawQuery("SELECT signature FROM meta WHERE id=1",null).use { c ->
             if (c.moveToFirst() && c.getString(0)==expected) return true
@@ -83,26 +87,59 @@ internal class VoiceCacheIndex(context: Context, speaker: Int, speed: Float) :
         val books=JSONArray(context.assets.open("voice-library/index.json").bufferedReader().use{it.readText()})
         val expectedTotal=(0 until books.length()).sumOf { books.getJSONObject(it).getInt("sentences") }
         val db=writableDatabase
-        val verifiedKeys=HashMap<String,Boolean>(expectedTotal.coerceAtMost(100000))
+        // This table is created on existing v1 databases without dropping validated queues.
+        // Each committed batch persists its cursor atomically with the rows.
+        db.execSQL("CREATE TABLE IF NOT EXISTS import_state(id INTEGER PRIMARY KEY CHECK(id=1), signature TEXT NOT NULL, total INTEGER NOT NULL, processed INTEGER NOT NULL, verified INTEGER NOT NULL)")
+        var checkpoint=0;var verified=0
+        db.rawQuery("SELECT signature,total,processed,verified FROM import_state WHERE id=1",null).use { c ->
+            if(c.moveToFirst() && c.getString(0)==expected && c.getInt(1)==expectedTotal) {
+                checkpoint=c.getInt(2);verified=c.getInt(3)
+            }
+        }
+        // A committed cursor must correspond exactly to the rows persisted.
+        val rows=db.rawQuery("SELECT COUNT(*) FROM segments",null).use { c -> c.moveToFirst();c.getInt(0) }
+        if(checkpoint !in 0..expectedTotal || rows!=checkpoint) checkpoint=0
+        if(checkpoint==0){
+            db.beginTransaction()
+            try{
+                db.delete("segments",null,null)
+                db.delete("meta",null,null)
+                db.delete("import_state",null,null)
+                db.execSQL("INSERT INTO import_state(id,signature,total,processed,verified) VALUES(1,?,?,0,0)",arrayOf(expected,expectedTotal))
+                db.setTransactionSuccessful()
+            }finally{db.endTransaction()}
+            verified=0
+        }
+        val verifiedKeys=HashMap<String,Boolean>(4000)
+        var seq=0;var nextBatch=checkpoint;var inTransaction=false
         val insert=db.compileStatement("INSERT INTO segments(seq,cache_key,text,book,chapter,chapter_index,chapter_total,ready) VALUES(?,?,?,?,?,?,?,?)")
-        var seq=0;var verified=0
-        db.beginTransaction()
+        fun commitBatch(){
+            if(!inTransaction)return
+            db.execSQL("UPDATE import_state SET processed=?, verified=? WHERE id=1",arrayOf(seq,verified))
+            db.setTransactionSuccessful()
+            db.endTransaction()
+            inTransaction=false
+            onScan(verified,expectedTotal)
+            verifiedKeys.clear()
+        }
         try {
-            db.delete("meta",null,null)
-            db.delete("segments",null,null)
-            for (i in 0 until books.length()) {
-                if (!shouldContinue()) throw InterruptedException("缓存索引建立中断")
+            for(i in 0 until books.length()){
+                if(!shouldContinue())throw InterruptedException("缓存索引建立中断")
                 val b=books.getJSONObject(i)
                 val name=b.getString("title")
                 val sections=JSONObject(context.assets.open("voice-library/${b.getString("id")}.json")
                     .bufferedReader().use{it.readText()}).getJSONArray("sections")
-                for (j in 0 until sections.length()) {
+                for(j in 0 until sections.length()){
                     val texts=sections.getJSONObject(j).getJSONArray("sentences")
-                    for (k in 0 until texts.length()) {
-                        if (!shouldContinue()) throw InterruptedException("缓存索引建立中断")
+                    for(k in 0 until texts.length()){
+                        if(!shouldContinue())throw InterruptedException("缓存索引建立中断")
+                        // Already indexed sentences only need their ordinal counted;
+                        // NEVER reread/revalidate all their PCM files during resume.
+                        if(seq<checkpoint){seq++;continue}
+                        if(!inTransaction){db.beginTransaction();inTransaction=true}
                         val text=texts.getString(k)
                         val key=disk.key(text,voiceSpeaker,voiceSpeed)
-                        val ready=verifiedKeys.getOrPut(key) { disk.has(key) }
+                        val ready=verifiedKeys.getOrPut(key){disk.has(key)}
                         insert.clearBindings()
                         insert.bindLong(1,(seq+1).toLong())
                         insert.bindString(2,key)
@@ -115,16 +152,22 @@ internal class VoiceCacheIndex(context: Context, speaker: Int, speed: Float) :
                         insert.executeInsert()
                         seq++
                         if(ready)verified++
-                        if(seq%2000==0)onScan(verified,expectedTotal)
+                        if(seq-nextBatch>=1000){commitBatch();nextBatch=seq}
                     }
                 }
             }
+            commitBatch()
             check(seq==expectedTotal){"语音索引与原著片段数量不一致：$seq/$expectedTotal"}
-            db.execSQL("INSERT INTO meta(id,signature,total,done) VALUES(1,?,?,?)",arrayOf(expected,seq,verified))
-            db.setTransactionSuccessful()
-        } finally {
+            db.beginTransaction()
+            try{
+                db.execSQL("INSERT OR REPLACE INTO meta(id,signature,total,done) VALUES(1,?,?,?)",arrayOf(expected,seq,verified))
+                db.delete("import_state",null,null)
+                db.execSQL("DELETE FROM failures")
+                db.setTransactionSuccessful()
+            }finally{db.endTransaction()}
+        }finally{
+            if(inTransaction)db.endTransaction() // interrupted batch rolls back; previous batches survive
             insert.close()
-            db.endTransaction()
         }
         onScan(verified,seq)
         return false
@@ -134,8 +177,48 @@ internal class VoiceCacheIndex(context: Context, speaker: Int, speed: Float) :
     private var voiceSpeed=1f
     fun setVoice(speaker:Int,speed:Float) {voiceSpeaker=speaker;voiceSpeed=speed}
 
-    fun next(): Job? = readableDatabase.rawQuery("SELECT cache_key,text,book,chapter,chapter_index,chapter_total FROM segments WHERE ready=0 ORDER BY seq LIMIT 1",null).use { c ->
-        if(c.moveToFirst()) Job(c.getString(0),c.getString(1),c.getString(2),c.getInt(3),c.getInt(4),c.getInt(5)) else null
+    @Volatile private var failuresReady=false
+    @Synchronized private fun ensureFailures() {
+        if(failuresReady)return
+        writableDatabase.execSQL("CREATE TABLE IF NOT EXISTS failures (cache_key TEXT PRIMARY KEY, attempts INTEGER NOT NULL, last_error TEXT NOT NULL, failed_at INTEGER NOT NULL, retry_after INTEGER NOT NULL)")
+        failuresReady=true
+    }
+    /** Failure cooldown applies per content hash, not per occurrence. Unfinished rows stay unfinished. */
+    fun clearFailure(key:String) {
+        ensureFailures()
+        writableDatabase.execSQL("DELETE FROM failures WHERE cache_key=?",arrayOf(key))
+    }
+    fun recordFailure(key:String, why:String, now:Long=System.currentTimeMillis()):Int {
+        ensureFailures()
+        val db=writableDatabase
+        db.beginTransaction()
+        try {
+            val previous=db.rawQuery("SELECT attempts FROM failures WHERE cache_key=?",arrayOf(key)).use { c ->
+                if(c.moveToFirst())c.getInt(0) else 0
+            }
+            val attempts=previous+1
+            val delay=when { attempts==1->20_000L; attempts==2->120_000L; attempts==3->600_000L; else->minOf(6L*60*60*1000,1_800_000L*(1L shl minOf(attempts-4,3))) }
+            db.execSQL("INSERT OR REPLACE INTO failures(cache_key,attempts,last_error,failed_at,retry_after) VALUES(?,?,?,?,?)",
+                arrayOf(key,attempts,why.take(180),now,now+delay))
+            db.setTransactionSuccessful()
+            return attempts
+        }finally{db.endTransaction()}
+    }
+    fun pendingCooldownMs(now:Long=System.currentTimeMillis()):Long {
+        ensureFailures()
+        return readableDatabase.rawQuery("SELECT MIN(f.retry_after) FROM segments s JOIN failures f ON f.cache_key=s.cache_key WHERE s.ready=0 AND f.retry_after>?",arrayOf(now.toString())).use { c ->
+            if(c.moveToFirst()&&!c.isNull(0))(c.getLong(0)-now).coerceAtLeast(1000L) else 0L
+        }
+    }
+    fun deferredCount(now:Long=System.currentTimeMillis()):Int {
+        ensureFailures()
+        return readableDatabase.rawQuery("SELECT COUNT(*) FROM segments s JOIN failures f ON f.cache_key=s.cache_key WHERE s.ready=0 AND f.retry_after>?",arrayOf(now.toString())).use { c->c.moveToFirst();c.getInt(0) }
+    }
+    fun next(now:Long=System.currentTimeMillis()): Job? {
+        ensureFailures()
+        return readableDatabase.rawQuery("SELECT s.cache_key,s.text,s.book,s.chapter,s.chapter_index,s.chapter_total FROM segments s LEFT JOIN failures f ON f.cache_key=s.cache_key WHERE s.ready=0 AND (f.retry_after IS NULL OR f.retry_after<=?) ORDER BY s.seq LIMIT 1",arrayOf(now.toString())).use { c ->
+            if(c.moveToFirst()) Job(c.getString(0),c.getString(1),c.getString(2),c.getInt(3),c.getInt(4),c.getInt(5)) else null
+        }
     }
     /** A single verified PCM makes EVERY identical occurrence ready. */
     fun complete(key: String): Int {
@@ -145,7 +228,10 @@ internal class VoiceCacheIndex(context: Context, speaker: Int, speed: Float) :
             val count=db.compileStatement("UPDATE segments SET ready=1 WHERE cache_key=? AND ready=0").use { statement ->
                 statement.bindString(1,key);statement.executeUpdateDelete()
             }
-            if(count>0)db.execSQL("UPDATE meta SET done=done+? WHERE id=1", arrayOf(count))
+            if(count>0) {
+                db.execSQL("UPDATE meta SET done=done+? WHERE id=1", arrayOf(count))
+                db.execSQL("DELETE FROM failures WHERE cache_key=?",arrayOf(key))
+            }
             db.setTransactionSuccessful()
             count
         } finally {db.endTransaction()}
@@ -173,7 +259,7 @@ internal class VoiceCacheIndex(context: Context, speaker: Int, speed: Float) :
             while(cursor.moveToNext()) {
                 if(!shouldContinue())throw InterruptedException("校验已被暂停")
                 val key=cursor.getString(0)
-                if(!disk.has(key))missing.add(key)
+                if(!disk.hasDeep(key))missing.add(key)
                 checked++
                 if(checked%2000==0)onChecked(checked,total)
             }
