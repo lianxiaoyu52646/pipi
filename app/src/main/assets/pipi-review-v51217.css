@@ -1,0 +1,80 @@
+/* PIPI V5.12.17 – unified mobile review sheet. Scoped: no changes to other dialogs. */
+.app .pipi-review-overlay{background:rgba(25,24,53,.42);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+.app .pipi-review-sheet{
+ height:min(82dvh,780px);max-height:calc(100dvh - 10px);min-height:0;
+ display:flex;flex-direction:column;overflow:hidden;
+ background:#fff;border:1px solid rgba(255,255,255,.85);
+ border-radius:30px 30px 0 0;box-shadow:0 -20px 72px rgba(28,27,84,.21);
+ padding:0!important;overscroll-behavior:contain;
+}
+.app .pipi-review-sheet>.sheet-handle{width:44px;height:5px;min-height:5px;flex-shrink:0;margin:10px auto 0;background:#dedbf1}
+.app .pipi-review-layout{min-height:0;height:100%;flex:1;display:flex;flex-direction:column;color:#262b45;overflow:hidden}
+.app .pipi-review-head{padding:11px 22px 12px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-shrink:0}
+.app .pipi-review-headline{display:flex;align-items:flex-start;flex-direction:column;gap:5px;min-width:0}
+.app .pipi-review-eyebrow{color:#958bc9;font-size:9px;letter-spacing:1.35px;font-weight:850}
+.app .pipi-review-headline strong{font-size:17px;letter-spacing:-.4px;font-weight:850;color:#32304d}
+.app .pipi-review-step{font-size:11px;color:#8b84ab;font-variant-numeric:tabular-nums}
+.app .pipi-review-close{width:39px;height:39px;border:none;background:#f5f4fa;border-radius:14px;color:#7e7a9a;font-size:16px;flex:none}
+.app .pipi-review-progress{height:4px;background:#f1effa;flex-shrink:0;margin:0 22px;border-radius:20px;overflow:hidden}
+.app .pipi-review-progress span{display:block;height:100%;border-radius:20px;background:linear-gradient(90deg,#8074e8,#b5a2f5);transition:width .3s ease}
+.app .pipi-review-hero{padding:18px 22px 15px;flex-shrink:0;background:linear-gradient(160deg,#fff 25%,#f9f7ff 100%);border-bottom:1px solid #eeecf6}
+.app .pipi-review-word-meta{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.app .pipi-review-pill{padding:5px 10px;border-radius:999px;background:#efecff;color:#6a5cd4;font-size:10px;font-weight:800}
+.app .pipi-review-due{color:#908ba4;font-size:10px;font-weight:650}
+.app .pipi-review-word-row{display:flex;align-items:center;gap:10px;justify-content:space-between;margin-top:13px}
+.app .pipi-review-word-wrap{min-width:0}
+.app .pipi-review-word-wrap h2{font-size:clamp(29px,7.3vw,39px);line-height:1.12;overflow-wrap:anywhere;letter-spacing:-1.5px;color:#2a2852;margin:0 0 7px;font-weight:850}
+.app .pipi-review-word-wrap p{color:#8f89ad;font-size:13px;margin:0;line-height:1.45;overflow-wrap:anywhere}
+.app .pipi-review-speak{display:grid;place-items:center;width:49px;height:49px;min-width:49px;border:1px solid #dfd9ff;border-radius:17px;background:#eeebff;color:#7062d9;box-shadow:0 5px 15px #6b62ba18}
+.app .pipi-review-word-source{font-size:10px;color:#88839c;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;margin-top:14px}
+.app .pipi-review-scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:19px 22px 18px;scrollbar-width:thin;scrollbar-color:#d9d3f5 transparent}
+.app .pipi-review-instruction{display:flex;gap:12px;padding:15px 14px;border:1px solid #edeafa;background:linear-gradient(140deg,#f8f7ff,#fff);border-radius:17px;align-items:flex-start}
+.app .pipi-review-instruction-dot{display:grid;place-items:center;width:30px;height:30px;border-radius:11px;background:#ece8ff;color:#7566db;flex:none;font-size:14px}
+.app .pipi-review-instruction strong{display:block;font-size:13px;color:#48416f;line-height:1.5;font-weight:800}
+.app .pipi-review-instruction p{margin:4px 0 0;color:#8b88a2;font-size:11px;line-height:1.6}
+.app .pipi-review-answer-area[hidden],.app .pipi-review-footer [hidden]{display:none!important}
+.app .pipi-review-answer-area{display:flex;flex-direction:column;gap:11px;padding-top:12px}
+.app .pipi-review-revealed{animation:pipiReviewAnswerIn .2s ease-out}
+.app .pipi-review-info-card{padding:17px;border-radius:17px;border:1px solid #f0eff6;background:#fbfaff;overflow-wrap:anywhere}
+.app .pipi-review-meaning{background:#f7f5ff;border-color:#ebe8fd}
+.app .pipi-review-info-label{font-size:10px;letter-spacing:.5px;color:#8f88b1;font-weight:800;margin-bottom:11px}
+.app .pipi-review-zh{font-size:18px;line-height:1.7;font-weight:800;color:#3d376c;white-space:pre-line;overflow-wrap:anywhere}
+.app .pipi-review-example{font-size:13px;color:#495270;line-height:1.8;margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.app .pipi-review-origin{padding:10px 0;border-top:1px solid #eeecf6}
+.app .pipi-review-origin b{color:#645a95;font-size:12px}
+.app .pipi-review-origin p{font-size:12px;line-height:1.75;color:#586079;margin:6px 0 0;white-space:pre-wrap}
+.app .pipi-review-origin .pipi-review-origin-zh,.app .pipi-review-origin-zh{color:#9086ac;font-size:11px;line-height:1.7;margin:7px 0 0}
+.app .pipi-review-submeta{font-size:10px;text-align:center;color:#a09bac;padding:4px 0}
+.app .pipi-review-muted{font-size:11px;color:#aaa2bf}
+.app .pipi-review-footer{flex-shrink:0;padding:14px 22px max(12px,env(safe-area-inset-bottom));border-top:1px solid #f0eef6;background:#fff;box-shadow:0 -8px 25px #35305207}
+.app .pipi-review-reveal{width:100%;height:54px;min-height:54px;display:flex;justify-content:center;align-items:center;gap:10px;border:0;border-radius:16px;background:linear-gradient(115deg,#7163de,#9283ea);font-size:14px;font-weight:850;color:white;box-shadow:0 8px 18px #6d5fd82c}
+.app .pipi-review-reveal-arrow{margin-left:2px;font-size:19px}
+.app .pipi-review-footer-note{font-size:10px;color:#a49fae;text-align:center;margin:9px 3px 0;line-height:1.5}
+.app .pipi-review-grade-grid{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+.app .pipi-review-grade{min-width:0;min-height:58px;border-radius:16px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;font-weight:850;transition:transform .12s ease;border:1px solid transparent}
+.app .pipi-review-grade:active,.app .pipi-review-reveal:active{transform:scale(.985)}
+.app .pipi-review-grade span{font-size:15px}.app .pipi-review-grade small{font-size:10px;font-weight:500;white-space:normal;line-height:1.25;text-align:center}
+.app .pipi-review-grade.is-again{background:#fff4f1;border-color:#f6dfd8;color:#b56559}
+.app .pipi-review-grade.is-good{background:#eae6ff;border-color:#e2dbfb;color:#6555ce}
+.app .pipi-review-enroll{width:100%;min-height:53px;border:none;border-radius:15px;background:#eeeaff;color:#6256ca;font-size:13px;font-weight:850}
+.app .pipi-review-manage{flex:none;align-self:center;padding:7px 12px 12px;border:none;background:transparent;color:#aaa4b8;font-size:10px;min-height:30px}
+.app .pipi-review-list-item{min-height:91px!important;max-width:100%;padding:15px 13px!important;align-items:center!important;box-shadow:0 5px 16px #332b7208;gap:8px}
+.app .pipi-review-list-word{min-width:0;display:flex;flex-direction:column;gap:4px!important;flex:1}
+.app .pipi-review-list-word strong{color:#302f4e;font-size:17px;font-weight:850;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}
+.app .pipi-review-list-word small{display:block;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.app .pipi-review-list-phonetic{color:#958db0!important}.app .pipi-review-list-detail{color:#63627b!important;font-size:12px!important}.app .pipi-review-list-detail.is-blind{color:#aaa6bc!important}
+.app .pipi-review-list-source{font-size:10px!important;color:#a5a0b1!important}
+.app .pipi-review-list-trailing{flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-end;gap:8px;max-width:98px}
+.app .pipi-review-list-trailing em{font-style:normal;font-size:10px;max-width:95px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#7569d2;background:#f4f2ff;padding:5px 7px;border-radius:7px}
+.app .pipi-review-list-trailing i{font-style:normal;color:#9d96c0;font-size:20px}
+@keyframes pipiReviewAnswerIn{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:translateY(0)}}
+@media(max-height:690px){.app .pipi-review-sheet{height:87dvh}.app .pipi-review-head{padding-top:7px;padding-bottom:7px}.app .pipi-review-hero{padding-top:10px;padding-bottom:9px}.app .pipi-review-word-wrap h2{font-size:27px}.app .pipi-review-scroll{padding-top:11px}}
+@media(max-width:359px){.app .pipi-review-head{padding-left:15px;padding-right:15px}.app .pipi-review-hero{padding-left:15px;padding-right:15px}.app .pipi-review-scroll{padding-left:15px;padding-right:15px}.app .pipi-review-footer{padding-left:15px;padding-right:15px}.app .pipi-review-grade small{font-size:9px}}
+@media(min-width:700px){.app .pipi-review-sheet{height:min(80%,730px);max-width:440px;border-radius:27px 27px 16px 16px}}
+@media(prefers-reduced-motion:reduce){.app .pipi-review-revealed{animation:none}}
+
+/* V5.12.18 phonetics: reserve a consistent line in all three review lists. */
+.app .pipi-review-list-phonetic{display:block;min-height:19px;line-height:1.5;font-size:12px!important;font-family:Arial,"Noto Sans",sans-serif;letter-spacing:.1px;color:#7066ae!important}
+.app .pipi-review-hero-phonetic{display:block;min-height:24px;line-height:1.5!important;font-size:15px!important;font-weight:600;color:#7166af!important;font-family:Arial,"Noto Sans",sans-serif;letter-spacing:.2px}
+.app [data-pipi-phonetic-state="pending"],.app [data-pipi-phonetic-state="loading"]{color:#aeaabf!important;font-size:11px!important;font-weight:400!important}
+.app [data-pipi-phonetic-state="missing"]{color:#a29eb0!important;font-size:11px!important;font-weight:400!important}

@@ -1,0 +1,43 @@
+'use strict';
+const assert=require('node:assert/strict'),fs=require('fs'),path=require('path'),vm=require('vm');
+const assets=path.join(__dirname,'../app/src/main/assets');
+const app=fs.readFileSync(path.join(assets,'app.js'),'utf8');
+const css=fs.readFileSync(path.join(assets,'pipi-review-v51217.css'),'utf8');
+const html=fs.readFileSync(path.join(assets,'index.html'),'utf8');
+const extract=(begin,end)=>{const a=app.indexOf(begin),b=app.indexOf(end,a+begin.length);assert.ok(a>=0&&b>a);return app.slice(a,b)};
+const id='lex:abandon';
+const card={word:'abandon',zh:'放弃；抛弃',phonetic:'/əˈbændən/',example:'We must never abandon our hope.'};
+const entry={kind:'vocab',unit:id,enrollment:'manual',status:'pending',source:'雅思词书',origins:[{title:'小公主',sentence:'Never abandon hope.',sentenceZh:'永远不要放弃希望。'}]};
+const state={vocab:{[id]:{dueAt:new Date(Date.now()-60000).toISOString()}},mistakes:{['word:'+id+':0']:entry}};
+const ui={v5ReviewQueue:[id],v5ReviewSessionTotal:1,v5ReviewCompleted:0};
+const context={state,ui,wordById:()=>card,errorKey:()=>`word:${id}:0`,PipiReviewLogic:{enrolled:m=>m.enrollment==='manual'&&m.status!=='removed'},dueLabel:()=> '现在到期',esc:s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),icon:()=>'<svg viewBox="0 0 24 24" width="21" height="21"><path d="M5 9h4l4-4v14l-4-4H5z" stroke="currentColor" fill="none"/></svg>',renderDialog:()=>{},console};
+vm.createContext(context);vm.runInContext(extract('function pipiReview(id){','\nfunction pipiReviewAnswer('),context);
+vm.runInContext("pipiReview('lex:abandon')",context);
+let cardHtml=ui.dialog;
+assert.match(cardHtml,/data-pipi-review-sheet="true"/);
+assert.match(cardHtml,/id="pipiReviewMeaning"[^>]*hidden/);
+assert.match(cardHtml,/id="pipiReviewGradePanel" hidden/);
+assert.match(cardHtml,/id="pipiReveal"/);
+assert.match(cardHtml,/data-action="v5-review-pass"/);
+assert.match(cardHtml,/data-action="v5-review-fail"/);
+assert.match(cardHtml,/data-action="v5-speak"/);
+assert.match(cardHtml,/Never abandon hope/);
+assert.ok(cardHtml.indexOf('Never abandon hope')>cardHtml.indexOf('id="pipiReviewMeaning"'),'translation and source are kept inside hidden answer');
+assert.match(css,/height:min\(82dvh,780px\)/);
+assert.match(css,/\.pipi-review-scroll\{flex:1;min-height:0;overflow-y:auto/);
+assert.match(css,/\.pipi-review-footer\{flex-shrink:0/);
+assert.match(html,/pipi-review-v51217\.css/);
+assert.match(app,/ui\.v5ReviewSessionTotal=ui\.v5ReviewQueue\.length/);
+assert.match(app,/pipiReviewOpen\(next\)/);
+assert.match(app,/function reviewOne\(id\)[\s\S]*?pipiReviewOpen\(m\.unit\)/);
+assert.match(app,/function renderDialog\(\)[\s\S]*?mounted\.outerHTML=ui\.dialog/);
+const legacy={...entry,enrollment:'legacy'};state.mistakes['word:'+id+':0']=legacy;vm.runInContext("pipiReview('lex:abandon')",context);
+assert.match(ui.dialog,/确认「不会」 · 加入生词本/);
+assert.doesNotMatch(ui.dialog,/data-action="v5-review-pass"/);
+state.mistakes['word:'+id+':0']=entry;
+// Generate a static browser inspection fixture using the ACTUAL production markup.
+if(process.argv.includes('--preview')){
+ const wrap=`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><style>${fs.readFileSync(path.join(assets,'styles.css'),'utf8')}\n${fs.readFileSync(path.join(assets,'ui-modern.css'),'utf8')}\n${css}</style><div class="app"><main id="viewport" class="scroll"><div class="content"><h1>复习</h1><div>今日到期　生词本　全部</div></div></main><div id="dialog-root"><div class="overlay pipi-review-overlay" data-action="close-dialog"><div class="sheet pipi-review-sheet" role="dialog" aria-modal="true"><div class="sheet-handle"></div>${cardHtml}</div></div></div></div><script>document.addEventListener('click',e=>{let t=e.target.closest('[data-action]');if(!t)return;if(t.dataset.action==='v5-reveal'){document.getElementById('pipiReviewMeaning').hidden=false;document.getElementById('pipiRevealPanel').hidden=true;document.getElementById('pipiReviewGradePanel').hidden=false;} });</script>`;
+ fs.writeFileSync(path.join(__dirname,'../../review_preview_v51217.html'),wrap);
+}
+console.log('PASS V5.12.17: single responsive fixed-height review sheet, reveal gating, fixed footer, continuous review, legacy safety, same UI for old entry');

@@ -119,7 +119,18 @@ function showPage(page,training,options={}){
 let toastTimer;
 function toast(msg){const e=document.getElementById('toast-root');e.innerHTML=`<div class="toast" role="status">${esc(msg)}</div>`;clearTimeout(toastTimer);toastTimer=setTimeout(()=>{e.innerHTML=''},2700)}
 function alertBox(title,body){ui.dialog=`<div class="sheet-header"><div class="sheet-title">${title}</div><button class="close" data-action="close-dialog">✕</button></div><div class="note" style="font-size:13px;color:#5f6f89">${body}</div><div class="sp20"></div><button class="btn full" data-action="close-dialog">知道了</button>`;renderDialog()}
-function renderDialog(){document.getElementById('dialog-root').innerHTML=ui.dialog?`<div class="overlay" data-action="close-dialog"><div class="sheet" role="dialog" aria-modal="true" ><div class="sheet-handle"></div>${ui.dialog}</div></div>`:'';window.PipiVoice?.refreshRateUI?.()}
+function renderDialog(){
+ const root=document.getElementById('dialog-root');
+ const isReview=!!ui.dialog&&ui.dialog.includes('data-pipi-review-sheet="true"');
+ // Keep the existing sheet mounted between review cards: no repeated slide-in or layout jump.
+ const mounted=isReview&&root.querySelector?.('.pipi-review-sheet .pipi-review-layout');
+ if(mounted){mounted.outerHTML=ui.dialog;}
+ else root.innerHTML=ui.dialog?`<div class="overlay${isReview?' pipi-review-overlay':''}" data-action="close-dialog"><div class="sheet${isReview?' pipi-review-sheet':''}" role="dialog" aria-modal="true" ${isReview?'aria-labelledby="pipiReviewHeading"':''}><div class="sheet-handle"></div>${ui.dialog}</div></div>`:'';
+ window.PipiVoice?.refreshRateUI?.();
+ // Resolve the current card immediately. A previous asynchronous lookup must
+ // never overwrite the phonetic of a newly opened card.
+ window.PipiReviewPhonetics?.hydrateSheet?.(root);
+}
 function render(resetScroll=false){const c=document.getElementById('content');let html='';
  if(ui.page==='today')html=renderToday();if(ui.page==='test')html=renderTest();if(ui.page==='train')html=renderTrain();if(ui.page==='review')html=renderReview();if(ui.page==='library')html=renderLiterature();if(ui.page==='plan')html=renderPlan();if(ui.page==='me')html=renderMe();if(ui.page==='metrics')html=renderOldMe();
  c.innerHTML=html+(ui.page==='train'?pipiUndoBar():'');
@@ -129,7 +140,7 @@ function render(resetScroll=false){const c=document.getElementById('content');le
  const topbar=document.querySelector('.app-top'),brand=topbar?.querySelector('.brand');
  topbar?.classList.toggle('pipi-word-nav-active',inWordList);
  if(brand){brand.innerHTML=inWordList?`<button type="button" class="pipi-top-back" data-action="choose-wordbook" aria-label="切换词书">${icon('chevron',20)}</button><button type="button" class="pipi-top-bookname pipi-switch-book" data-action="switch-book" aria-label="选择词书">${esc(SprintBooks.BOOKS[activeBook()]?.short||'基础词库')} ▾</button>`:`<span class="brand-icon brand-avatar"><img src="./app-avatar.png" alt="皮皮头像"/></span>皮皮`}
- if(resetScroll)viewport.scrollTop=0;if(inWordList)mountVirtualWordList();pipiUpdateCacheStatus();
+ if(resetScroll)viewport.scrollTop=0;if(inWordList)mountVirtualWordList();if(ui.page==='review')(typeof window!=='undefined'?window.PipiReviewPhonetics:null)?.hydrateList?.();pipiUpdateCacheStatus();
 }
 function dailyAlloc(){
   const base=currentPhase()===0?[23,34,18,13,12]:currentPhase()===1?[18,31,23,14,14]:currentPhase()===2?[13,27,21,20,19]:[10,27,21,21,21];
@@ -525,7 +536,17 @@ function onAction(action,el){switch(action){
 case 'v5-continue-book':ui.keepStudyNext=true;ui.bookStudyOpen=true;ui.training='words';showPage('train','words');break;
 case 'v5-undo':pipiGradeUndo();break;
 case 'v5-tool-back':ui.training='words';showPage('me');break;
-case 'v5-reveal':document.getElementById('pipiReviewMeaning').hidden=false;document.getElementById('pipiReveal').hidden=true;break;
+case 'v5-reveal':{
+ const answer=document.getElementById('pipiReviewMeaning');
+ const reveal=document.getElementById('pipiRevealPanel');
+ const grading=document.getElementById('pipiReviewGradePanel');
+ if(answer){answer.hidden=false;answer.classList.add('pipi-review-revealed');}
+ if(reveal)reveal.hidden=true;
+ if(grading)grading.hidden=false;
+ const note=document.getElementById('pipiReviewHint');if(note)note.textContent='现在根据真实记忆判断，会或不会都没有压力';
+ const area=document.querySelector('.pipi-review-scroll');if(area)area.scrollTop=0;
+ break;
+}
 case 'v5-speak':speak(wordById(ui.v5ReviewId)?.word||'');break;
 case 'v5-review-pass':pipiReviewAnswer(true);break;
 case 'v5-review-fail':pipiReviewAnswer(false);break;
@@ -540,9 +561,9 @@ case 'reader-prev':moveReaderChapter(-1);break;
 case 'reader-complete':moveReaderChapter(1,true);break;
 case 'reader-pronounce':if(ui.readerSelection)speak(ui.readerSelection.word,.89);break;
 case 'reader-mark-word':saveReaderMarkedWord();break;
-case 'review-reveal':document.getElementById('reviewMeaning')?.classList.remove('hide');break;
-case 'review-self-known':{const m=state.mistakes?.[ui.reviewId];if(PipiReviewLogic.enrolled(m)){healMistake(m.kind,m.unit,m.q);save();ui.dialog=null;render();toast('已记录「会」，FSRS已安排下次复习，单词仍在生词本')}break}
-case 'review-self-fail':{const m=state.mistakes?.[ui.reviewId];if(PipiReviewLogic.enrolled(m)){upsertMistake(m.kind,m.unit,m.q,'再次回忆失败',{source:'错词自测',bookId:m.bookId,sentence:m.sentence,sentenceZh:m.sentenceZh,enrollment:'manual'});save();ui.dialog=null;render();toast('已记录「不会」，10分钟后可再次复习')}break}
+case 'review-reveal':onAction('v5-reveal');break;
+case 'review-self-known':pipiReviewAnswer(true);break;
+case 'review-self-fail':pipiReviewAnswer(false);break;
 
 case 'choose-wordbook':case 'switch-book':openWordBookSwitch();break;
 case 'load-active-book':loadSelectedBook(activeBook());break;
@@ -553,7 +574,7 @@ case 'book-quiz-start':startBookQuiz();break;
 case 'book-quiz-exit':ui.bookQuiz=null;render();break;
 case 'book-quiz-next':bookQuizNext();break;
 case 'settings':settingsModal();break;
-case 'close-dialog':ui.dialog=null;renderDialog();break;
+case 'close-dialog':ui.dialog=null;ui.v5ReviewQueue=null;renderDialog();break;
 case 'start-vocab':createQuiz('vocab');break;
 case 'start-sound':createQuiz('sound');break;
 case 'quiz-say':{const q=state.quiz;speak(wordById(q.ids[q.index]).word,.9);break}
@@ -713,18 +734,32 @@ function reviewSearchText(row){const id=row.id,word=wordById(id),m=row.item;cons
 let pipiReviewSearchTimer=null;
 function scheduleReviewSearch(){if(pipiReviewSearchTimer)clearTimeout(pipiReviewSearchTimer);pipiReviewSearchTimer=setTimeout(()=>{pipiReviewSearchTimer=null;updateReviewList(true)},130);}
 function reviewRows(){const tab=['due','unknown','all'].includes(ui.reviewFilterV5)?ui.reviewFilterV5:'due';const q=String(ui.reviewQueryV5||'').trim().toLowerCase();const rows=PipiReviewLogic.list(state,tab).filter(row=>{if(!q)return true;return reviewSearchText(row).includes(q)});if(tab==='all')rows.sort((a,b)=>String(wordById(a.id)?.word||a.id).localeCompare(String(wordById(b.id)?.word||b.id),'en'));return rows;}
-function reviewRowHTML(row,tab){const id=row.id,m=row.item,w=wordById(id),name=w?.word||id.replace(/^lex:/,'');const source=(m.origins||[]).map(o=>o.title).filter(Boolean).slice(0,2).join('、')||m.source||(state.readerWords?.[id]?'原著阅读':'词书');const isDue=tab==='due';return `<button class="v5-review-item" data-v5-review-id="${esc(id)}"><span><b>${esc(name)}</b>${w?.phonetic?`<small>${esc(w.phonetic)}</small>`:''}${isDue?'<small class="v5-review-hidden-answer">释义将在复习卡片中揭示</small>':`<small>${esc(String(w?.zh||'可点开加载离线释义').slice(0,65))}</small>`}<small>来源：${esc(source)}</small></span><span>${isDue?'立即复习':tab==='unknown'?dueLabel(state.vocab[id]):m.enrollment==='legacy'?'待确认收录':m.status==='removed'?'已移除':'已收录'} ›</span></button>`}
+function pipiReviewPhonetic(word,original){
+ const helper=typeof window!=='undefined'?window.PipiReviewPhonetics:null;
+ return helper?.format?.(original)||helper?.peek?.(word)||'';
+}
+function reviewRowHTML(row,tab){
+ const id=row.id,m=row.item,w=wordById(id),name=w?.word||id.replace(/^lex:/,'');
+ const source=(m.origins||[]).map(o=>o.title).filter(Boolean).slice(0,2).join('、')||m.source||(state.readerWords?.[id]?'原著阅读':'词书');
+ const isDue=tab==='due',status=isDue?'现在复习':tab==='unknown'?dueLabel(state.vocab[id]):m.enrollment==='legacy'?'待确认收录':m.status==='removed'?'已移除':'已收录';
+ const detail=isDue?'先自己回忆，点击后揭示释义':String(w?.zh||'可点开查看离线释义').slice(0,68);
+ const phonetic=typeof pipiReviewPhonetic==='function'?pipiReviewPhonetic(name,w?.phonetic):String(w?.phonetic||'');
+ return `<button class="v5-review-item pipi-review-list-item" data-v5-review-id="${esc(id)}" aria-label="打开 ${esc(name)} 的复习卡片"><span class="pipi-review-list-word"><strong>${esc(name)}</strong><small class="pipi-review-list-phonetic" data-pipi-phonetic-word="${esc(name)}" data-pipi-phonetic-state="${phonetic?'ready':'pending'}">${esc(phonetic||'音标查询中…')}</small><small class="pipi-review-list-detail${isDue?' is-blind':''}">${esc(detail)}</small><small class="pipi-review-list-source">${esc(source)}</small></span><span class="pipi-review-list-trailing"><em>${esc(status)}</em><i aria-hidden="true">›</i></span></button>`;
+}
 function updateReviewList(reset=false){const el=document.getElementById('pipiReviewItems');if(!el)return;const viewport=document.getElementById('viewport'),oldTop=viewport?.scrollTop||0;if(reset)ui.reviewShown=REVIEW_PAGE_SIZE;const rows=reviewRows(),tab=ui.reviewFilterV5||'due',n=Math.min(rows.length,ui.reviewShown||REVIEW_PAGE_SIZE);el.innerHTML=rows.length?rows.slice(0,n).map(r=>reviewRowHTML(r,tab)).join(''):'<div class="card center" style="padding:32px 16px">这里暂无符合条件的单词。</div>';
- const count=document.getElementById('pipiReviewCount');if(count)count.textContent=rows.length+' 个';const more=document.getElementById('pipiReviewMore');if(more){more.hidden=n>=rows.length;more.textContent=`继续加载（已显示 ${n}/${rows.length}）`}if(viewport)viewport.scrollTop=oldTop}
+ const dueCount=document.getElementById('pipiDueCount');if(dueCount)dueCount.textContent=PipiReviewLogic.dueIds(state).length;
+ const count=document.getElementById('pipiReviewCount');if(count)count.textContent=rows.length+' 个';const more=document.getElementById('pipiReviewMore');if(more){more.hidden=n>=rows.length;more.textContent=`继续加载（已显示 ${n}/${rows.length}）`}if(viewport)viewport.scrollTop=oldTop;(typeof window!=='undefined'?window.PipiReviewPhonetics:null)?.hydrateList?.()}
 function loadMoreReview(){ui.reviewShown=(ui.reviewShown||REVIEW_PAGE_SIZE)+REVIEW_PAGE_SIZE;updateReviewList()}
-function renderReview(){const due=PipiReviewLogic.dueIds(state).length,tab=['due','unknown','all'].includes(ui.reviewFilterV5)?ui.reviewFilterV5:'due';const rows=reviewRows(),n=Math.min(rows.length,ui.reviewShown||REVIEW_PAGE_SIZE);return `<div class="kicker">04 / SPACED REPETITION</div><h1 class="title">复习，让记忆留下来</h1><p class="subtitle">只在主动选择「不会」后加入 FSRS；练习答错不会自动收录。旧版来源无法确认的记录保留在「全部」，由你决定是否重新加入。</p><div class="v5-review-feature"><div><span>今日到期</span><strong>${due}</strong><small>FSRS 根据记忆稳定度安排复习</small></div><span class="v5-review-orb">↻</span></div><div class="v5-review-filters">${[['due','今日到期'],['unknown','生词本'],['all','全部']].map(([k,t])=>`<button data-v5-filter="${k}" class="${tab===k?'active':''}">${t}</button>`).join('')}</div><input class="input" id="v5Search" value="${esc(ui.reviewQueryV5||'')}" placeholder="搜索英文、释义或原句" autocomplete="off"/><div class="v5-section-label"><h2>${tab==='due'?'今日到期 · 先回忆后揭示':tab==='unknown'?'主动收录的生词 · 最新在前':'全部记录 · 含待确认的旧记录'}</h2><span id="pipiReviewCount">${rows.length} 个</span></div><div class="v5-review-list" id="pipiReviewItems">${rows.length?rows.slice(0,n).map(r=>reviewRowHTML(r,tab)).join(''):'<div class="card center" style="padding:32px 16px">这里暂无符合条件的单词。</div>'}</div><button class="btn ghost full" id="pipiReviewMore" data-action="v5-review-more" ${n>=rows.length?'hidden':''}>继续加载（已显示 ${n}/${rows.length}）</button>`}
+function renderReview(){const due=PipiReviewLogic.dueIds(state).length,tab=['due','unknown','all'].includes(ui.reviewFilterV5)?ui.reviewFilterV5:'due';const rows=reviewRows(),n=Math.min(rows.length,ui.reviewShown||REVIEW_PAGE_SIZE);return `<div class="kicker">04 / SPACED REPETITION</div><h1 class="title">复习，让记忆留下来</h1><p class="subtitle">只在主动选择「不会」后加入 FSRS；练习答错不会自动收录。旧版来源无法确认的记录保留在「全部」，由你决定是否重新加入。</p><div class="v5-review-feature"><div><span>今日到期</span><strong id="pipiDueCount">${due}</strong><small>FSRS 根据记忆稳定度安排复习</small></div><span class="v5-review-orb">↻</span></div><div class="v5-review-filters">${[['due','今日到期'],['unknown','生词本'],['all','全部']].map(([k,t])=>`<button data-v5-filter="${k}" class="${tab===k?'active':''}">${t}</button>`).join('')}</div><input class="input" id="v5Search" value="${esc(ui.reviewQueryV5||'')}" placeholder="搜索英文、释义或原句" autocomplete="off"/><div class="v5-section-label"><h2>${tab==='due'?'今日到期 · 先回忆后揭示':tab==='unknown'?'主动收录的生词 · 最新在前':'全部记录 · 含待确认的旧记录'}</h2><span id="pipiReviewCount">${rows.length} 个</span></div><div class="v5-review-list" id="pipiReviewItems">${rows.length?rows.slice(0,n).map(r=>reviewRowHTML(r,tab)).join(''):'<div class="card center" style="padding:32px 16px">这里暂无符合条件的单词。</div>'}</div><button class="btn ghost full" id="pipiReviewMore" data-action="v5-review-more" ${n>=rows.length?'hidden':''}>继续加载（已显示 ${n}/${rows.length}）</button>`}
 
-function reviewOne(id){const m=state.mistakes?.[id];if(!m){toast('没有找到这条记录');return}
+function reviewOne(id){
+ const m=state.mistakes?.[id];if(!m){toast('没有找到这条记录');return}
+ // Legacy entry points use the exact same unified FSRS review sheet.
  if(WORD_KINDS.has(m.kind)){
-  const w=wordById(m.unit);if(!w){toast('此词目前未加载，请先打开对应词库');return}
-  ui.reviewId=id;
-  ui.dialog=`<div class="sheet-header"><div class="sheet-title">FSRS 生词复习</div><button class="close" data-action="close-dialog">✕</button></div><p class="subtitle">先在脑中回忆意思，再显示答案。只需选择「不会 / 会」，系统自动计算下次出现时间。</p><h2 class="qword">${esc(w.word)} <button class="textbtn" data-action="review-say" aria-label="播放读音">${icon('volume',18)}</button></h2>${m.sentence?`<div class="reader-context">${esc(m.sentence)}</div>`:''}<div class="review-recall"><button class="btn full" data-action="review-reveal">显示释义并自评</button><div id="reviewMeaning" class="review-meaning hide"><b>${esc(w.zh)}</b>${w.example?`<p class="micro">${esc(w.example)}</p>`:''}<div class="binary-actions"><button class="binary-grade unknown" data-action="review-self-fail">不会<small>再安排复习</small></button><button class="binary-grade known" data-action="review-self-known">会<small>智能延长间隔</small></button></div></div></div><p class="micro">这张生词卡已累计答「会」${Number(m.success)||0} 次；FSRS 会根据记忆稳定度安排下次复习，不会因为答对次数自动移出生词本。</p>`;
-  renderDialog();return;
+  ui.v5ReviewQueue=PipiReviewLogic.enrolled(m)?[m.unit]:[];
+  ui.v5ReviewSessionTotal=ui.v5ReviewQueue.length;
+  ui.v5ReviewCompleted=0;
+  pipiReviewOpen(m.unit);return;
  }
  if(m.kind==='listen'){ui.lesson=Number(m.unit);ui.answers={};ui.lessonSubmitted=false;ui.transcript=false;showPage('train','listen')}
  else{ui.reading=Number(m.unit);ui.readingAnswers={};ui.readingSubmitted=false;showPage('train','read')}
@@ -792,21 +827,54 @@ async function pipiReviewOpen(id){
  }
  pipiReview(id);
 }
-function pipiReview(id){const w=wordById(id),m=state.vocab?.[id],entry=state.mistakes?.[errorKey('vocab',id,0)];if(!entry){toast('没有找到这条记录');return}if(!w||!w.zh||/^(?:待查释义|暂无|未找到)/.test(w.zh)){toast('这张词卡暂无准确中文释义，可在词书或原著离线词典查找');return}
- ui.v5ReviewId=id;const sources=(entry.origins||[]);const extraSources=sources.length?`<details class="v5-review-sources"><summary>查看来源与原句（${sources.length}条）</summary>${sources.map(x=>`<div class="reader-context"><b>${esc(x.title||x.bookId||'原著')}</b><p>${esc(x.sentence||'')}</p>${x.sentenceZh?`<p>${esc(x.sentenceZh)}</p>`:''}</div>`).join('')}</details>`:entry.sentence?`<details><summary>查看原句</summary><p>${esc(entry.sentence)}</p></details>`:'';
- const legacy=entry.enrollment==='legacy',removed=entry.status==='removed',manual=PipiReviewLogic.enrolled(entry);
- ui.dialog=`<div class="sheet-header"><div class="sheet-title">${legacy?'历史单词 · 待确认':'FSRS 间隔复习'}</div><button class="close" data-action="close-dialog">✕</button></div><p class="micro">${legacy?'旧记录收录方式不明确；可主动确认加入，不会清零历史记忆数据。':removed?'此词已由你移出生词本。':'先回忆意思，再揭示释义，FSRS 自动计算下次复习日期。'}</p><h2 class="qword">${esc(w.word)} <button class="textbtn" data-action="v5-speak">${icon('volume',18)}</button></h2>${extraSources}<button class="btn full" id="pipiReveal" data-action="v5-reveal">显示释义</button><div id="pipiReviewMeaning" class="v5-review-answer" hidden><h3>${esc(w.zh)}</h3><p>${esc(w.example||'')}</p>${manual?`<div class="binary-actions"><button class="binary-grade unknown" data-action="v5-review-fail">不会</button><button class="binary-grade known" data-action="v5-review-pass">会</button></div><p class="micro">下次复习：${esc(dueLabel(m))}</p>`:''}</div><div class="sp12"></div>${manual?'<button class="btn ghost full" data-action="v5-review-remove">主动移出生词本</button>':'<button class="btn soft full" data-action="v5-review-enroll">确认「不会」· 加入 FSRS 生词本</button>'}`;renderDialog()}
+function pipiReview(id){
+ const w=wordById(id),m=state.vocab?.[id],entry=state.mistakes?.[errorKey('vocab',id,0)];
+ if(!entry){toast('没有找到这条记录');return}
+ if(!w||!w.zh||/^(?:待查释义|暂无|未找到)/.test(w.zh)){toast('这张词卡暂无准确中文释义，可在词书或原著离线词典查找');return}
+ ui.v5ReviewId=id;
+ const manual=PipiReviewLogic.enrolled(entry),legacy=entry.enrollment==='legacy',removed=entry.status==='removed';
+ const sources=Array.isArray(entry.origins)?entry.origins:[];
+ const sourceName=sources.map(x=>x.title||x.bookId).filter(Boolean).slice(0,2).join(' · ')||entry.source||'英语词书';
+ const session=Array.isArray(ui.v5ReviewQueue)?ui.v5ReviewQueue:[];
+ const pos=session.indexOf(id),done=Number(ui.v5ReviewCompleted)||0,total=Math.max(1,Number(ui.v5ReviewSessionTotal)||session.length||1);
+ const step=manual&&pos>=0?`${Math.min(done+1,total)} / ${total}`:'单词记忆卡';
+ const pct=manual&&pos>=0?Math.min(100,Math.round(100*done/total)):0;
+ const origins=sources.length?`<div class="pipi-review-info-card"><div class="pipi-review-info-label">原著来源 · ${sources.length} 条</div>${sources.slice(0,8).map(x=>`<div class="pipi-review-origin"><b>${esc(x.title||x.bookId||'阅读原著')}</b>${x.sentence?`<p>${esc(x.sentence)}</p>`:''}${x.sentenceZh?`<p class="pipi-review-origin-zh">${esc(x.sentenceZh)}</p>`:''}</div>`).join('')}${sources.length>8?`<p class="pipi-review-muted">另有 ${sources.length-8} 条来源已保存在学习记录中</p>`:''}</div>`:entry.sentence?`<div class="pipi-review-info-card"><div class="pipi-review-info-label">学习原句</div><p class="pipi-review-example">${esc(entry.sentence)}</p>${entry.sentenceZh?`<p class="pipi-review-origin-zh">${esc(entry.sentenceZh)}</p>`:''}</div>`:'';
+ const explanation=legacy?'旧学习记录暂未确认来源；确认“不会”后才加入生词本。':removed?'你之前主动移除了这个词，重新收录需要再次确认。':'先看英文，在心里回忆意思，再揭示中文作答。';
+ const phonetic=typeof pipiReviewPhonetic==='function'?pipiReviewPhonetic(w.word,w.phonetic):String(w.phonetic||'');
+ const controls=manual?`<div class="pipi-review-grade-grid"><button class="pipi-review-grade is-again" data-action="v5-review-fail"><span>还不会</span><small>FSRS 安排再次复习</small></button><button class="pipi-review-grade is-good" data-action="v5-review-pass"><span>记住了</span><small>FSRS 延长记忆间隔</small></button></div>`:`<button class="pipi-review-enroll" data-action="v5-review-enroll">确认「不会」 · 加入生词本</button><p class="pipi-review-footer-note">旧记录不会自动进入 FSRS，只有主动收录后才开始复习</p>`;
+ ui.dialog=`<div class="pipi-review-layout" data-pipi-review-sheet="true">
+   <header class="pipi-review-head"><div class="pipi-review-headline"><span class="pipi-review-eyebrow">PIPI · MEMORY PRACTICE</span><strong id="pipiReviewHeading">${legacy?'历史学习记录':removed?'再次认识这个词':'FSRS 单词复习'}</strong><span class="pipi-review-step">${step}</span></div><button class="pipi-review-close" data-action="close-dialog" aria-label="关闭复习卡片">✕</button></header>
+   <div class="pipi-review-progress" role="progressbar" aria-label="本轮复习进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span style="width:${pct}%"></span></div>
+   <section class="pipi-review-hero"><div class="pipi-review-word-meta"><span class="pipi-review-pill">${manual?'间隔记忆':'历史记录'}</span><span class="pipi-review-due">${esc(manual?dueLabel(m):legacy?'待确认':removed?'已移除':'未收录')}</span></div><div class="pipi-review-word-row"><div class="pipi-review-word-wrap"><h2>${esc(w.word)}</h2><p class="pipi-review-hero-phonetic" data-pipi-phonetic-word="${esc(w.word)}" data-pipi-phonetic-state="${phonetic?'ready':'pending'}" aria-label="音标">${esc(phonetic||'音标查询中…')}</p></div><button class="pipi-review-speak" data-action="v5-speak" aria-label="播放 ${esc(w.word)} 的读音">${icon('volume',23)}</button></div><div class="pipi-review-word-source" title="${esc(sourceName)}">来源 · ${esc(sourceName)}</div></section>
+   <main class="pipi-review-scroll" aria-live="polite"><div class="pipi-review-instruction"><span class="pipi-review-instruction-dot">✦</span><div><strong id="pipiReviewHint">${esc(manual?'先在心里说出中文意思':explanation)}</strong><p>${manual?'不必急着回答，回忆完再点击显示答案。':'点击显示答案后查看完整释义和学习记录。'}</p></div></div>
+    <div id="pipiReviewMeaning" class="pipi-review-answer-area" hidden><div class="pipi-review-info-card pipi-review-meaning"><div class="pipi-review-info-label">中文释义</div><div class="pipi-review-zh">${esc(w.zh)}</div></div>${w.example?`<div class="pipi-review-info-card"><div class="pipi-review-info-label">英文例句</div><p class="pipi-review-example">${esc(w.example)}</p></div>`:''}${origins}<div class="pipi-review-submeta">${manual?`下次复习安排由 FSRS 自动调整 · 当前 ${esc(dueLabel(m))}`:'历史学习记录会保留，只有手动加入才进入生词本'}</div></div>
+   </main>
+   <footer class="pipi-review-footer"><div id="pipiRevealPanel"><button class="pipi-review-reveal" id="pipiReveal" data-action="v5-reveal">${icon('eye',19)} <span>显示答案</span><span class="pipi-review-reveal-arrow">→</span></button><p class="pipi-review-footer-note">先回忆，再揭示。答案不会提前出现。</p></div><div id="pipiReviewGradePanel" hidden>${controls}</div></footer>
+   ${manual?'<button class="pipi-review-manage" data-action="v5-review-remove">管理生词 · 主动移出</button>':''}
+ </div>`;
+ renderDialog();
+}
 function pipiReviewAnswer(known){const id=ui.v5ReviewId,entry=state.mistakes?.[errorKey('vocab',id,0)];if(!id||!PipiReviewLogic.enrolled(entry))return;const word=wordById(id)?.word||id;const before=JSON.stringify(state);if(known)healMistake(entry.kind,id,0);else upsertMistake(entry.kind,id,0,'复习：未记住',{source:entry.source,bookId:entry.bookId,sentence:entry.sentence,sentenceZh:entry.sentenceZh,enrollment:'manual'});
  PipiV5.addEvent(state,{type:'review_done',wordId:id,verdict:known?'good':'again'});const d=dateKey();state.dayReviews[d]||={reviews:0,new:0};state.dayReviews[d].reviews++;
  if(!save(true)){state=JSON.parse(before);toast('存储失败，作答未保存');return}
  const queue=ui.v5ReviewQueue||[],pos=queue.indexOf(id);if(pos>=0)queue.splice(pos,1);
  const next=queue.find(x=>PipiReviewLogic.enrolled(state.mistakes?.[errorKey('vocab',x,0)]));
- ui.v5ReviewId=null;ui.dialog=null;render();if(next){pipiReviewOpen(next)}else{ui.v5ReviewQueue=null;toast(`「${word}」已复习，今日队列已完成`)}}
+ ui.v5ReviewCompleted=(Number(ui.v5ReviewCompleted)||0)+1;
+ ui.v5ReviewId=null;
+ if(next){
+  // Only refresh the underlying list; retain the same bottom sheet and its position.
+  if(typeof updateReviewList==='function')updateReviewList();
+  pipiReviewOpen(next);
+ }else{
+  ui.dialog=null;ui.v5ReviewQueue=null;render();
+  toast(`「${word}」已保存，当前复习队列完成`);
+ }}
 function pipiReviewRemove(){const id=ui.v5ReviewId,entry=state.mistakes?.[errorKey('vocab',id,0)];if(!PipiReviewLogic.enrolled(entry))return;if(!confirm('确认将该词移出生词本？学习历史保留在「全部」，可再次手动收录。'))return;const before=JSON.stringify(state);entry.status='removed';entry.enrollment='removed';if(state.vocab[id])state.vocab[id].reviewPaused=true;if(!save(true)){state=JSON.parse(before);toast('移除保存失败');return}ui.v5ReviewQueue=null;ui.v5ReviewId=null;ui.dialog=null;render();toast('已移出生词本，历史保留在全部')}
 function pipiReviewEnroll(){const id=ui.v5ReviewId,entry=state.mistakes?.[errorKey('vocab',id,0)];if(!entry)return;const before=JSON.stringify(state);entry.enrollment='manual';entry.status='pending';if(!state.vocab[id])reviewMemory(id,false);else {state.vocab[id].reviewPaused=false;delete state.vocab[id]._pipiLegacyPaused;}if(!save(true)){state=JSON.parse(before);toast('加入保存失败');return}ui.dialog=null;render();pipiReviewOpen(id);toast('已由你主动加入生词本')}
 function pipiNavBack(){
  flushWordListProgress();
- if(ui.dialog){ui.dialog=null;renderDialog();return true}
+ if(ui.dialog){ui.dialog=null;ui.v5ReviewQueue=null;renderDialog();return true}
  if(ui.bookQuiz){ui.bookQuiz=null;render();return true}
  if(ui.page==='train'&&ui.bookStudyOpen){ui.bookStudyOpen=false;ui.wordId=null;ui.flip=false;render(true);return true}
  pipiSavePosition();
@@ -830,7 +898,14 @@ document.addEventListener('click',e=>{
 // A single event dispatcher keeps all generated screens interactive.
 document.addEventListener('click',async e=>{const target=e.target.closest('[data-speaking-recording],[data-writing-history-id],[data-action],[data-page],[data-training],[data-go-train],[data-grade],[data-review],[data-review-answer],[data-sound-choice],[data-word-say],[data-stage-answer],[data-quiz-answer],[data-book],[data-book-answer],[data-listen-answer],[data-read-answer],[data-rate],[data-reader-book],[data-reader-word],[data-review-filter],[data-v5-filter],[data-v5-review-id]');if(!target)return;if(target.classList.contains('overlay')&&e.target.closest('.sheet'))return;
 if(target.dataset.v5Filter){ui.reviewTabScroll=ui.reviewTabScroll||{};ui.reviewTabScroll[ui.reviewFilterV5||'due']=document.getElementById('viewport')?.scrollTop||0;ui.reviewFilterV5=target.dataset.v5Filter;ui.reviewShown=REVIEW_PAGE_SIZE;ui.v5ReviewQueue=null;render();const viewport=document.getElementById('viewport');if(viewport)viewport.scrollTop=ui.reviewTabScroll[ui.reviewFilterV5]||0;return}
-if(target.dataset.v5ReviewId){if((ui.reviewFilterV5||'due')==='due')ui.v5ReviewQueue=reviewRows().map(row=>row.id).filter(id=>PipiReviewLogic.enrolled(state.mistakes?.[errorKey('vocab',id,0)]));else ui.v5ReviewQueue=null;pipiReviewOpen(target.dataset.v5ReviewId);return}
+if(target.dataset.v5ReviewId){
+ const current=target.dataset.v5ReviewId;
+ const others=(ui.reviewFilterV5||'due')==='due'?reviewRows().map(row=>row.id).filter(id=>id!==current&&PipiReviewLogic.enrolled(state.mistakes?.[errorKey('vocab',id,0)])):[];
+ ui.v5ReviewQueue=PipiReviewLogic.enrolled(state.mistakes?.[errorKey('vocab',current,0)])?[current,...others]:others;
+ ui.v5ReviewSessionTotal=ui.v5ReviewQueue.length;
+ ui.v5ReviewCompleted=0;
+ pipiReviewOpen(current);return;
+}
 if(target.dataset.readerBook){openReaderBook(target.dataset.readerBook);return}
 if(target.dataset.readerWord){showReaderWord(target.dataset.readerWord,Number(target.dataset.readerP));return}
 if(target.dataset.reviewFilter){ui.reviewFilter=target.dataset.reviewFilter;render();return}
@@ -863,6 +938,22 @@ if(e.target.id==='speakingPicker'){ui.speak=Number(e.target.value);ui.recordBlob
 if(e.target.id==='writingPicker'){ui.write=Number(e.target.value);render(true);return}
 if(e.target.id==='v5Search'){return}if(e.target.id==='mistakeSearch'){ui.reviewQuery=e.target.value;render();return}if(e.target.id==='guessBox')ui.quizGuess=e.target.checked;if(e.target.dataset.rubric)ui['r_'+e.target.dataset.rubric]=e.target.checked;if(e.target.dataset.writeRubric)ui['w_'+e.target.dataset.writeRubric]=e.target.checked;if(e.target.id==='restoreFile'&&e.target.files?.[0]){location.href='./backup.html';return}});
 document.addEventListener('input',e=>{if(e.target.id==='v5Search'){ui.reviewQueryV5=e.target.value;scheduleReviewSearch();return}if(e.target.id==='mistakeSearch'){ui.reviewQuery=e.target.value;const q=e.target.value.toLowerCase().trim();document.querySelectorAll('.review-entry').forEach(el=>{el.style.display=!q||el.textContent.toLowerCase().includes(q)?'':'none'});return}if(e.target.id==='libraryQuery'){searchWords(e.target.value);return}if(e.target.id==='writingInput'){state.writingDrafts[ui.write]=e.target.value;scheduleWritingDraft();const n=wordsOf(e.target.value).length,need=writing[ui.write].min;const count=document.getElementById('writing-count'),meter=document.getElementById('writing-meter');if(count)count.textContent=`${n} words`;if(meter)meter.style.width=`${clamp(n/need*100,0,100)}%`}});
+// A downward swipe on the dedicated grip dismisses the review without affecting grade data.
+let pipiReviewGripY=null;
+document.addEventListener('touchstart',e=>{
+ if(e.target.closest?.('.pipi-review-sheet>.sheet-handle'))pipiReviewGripY=e.touches?.[0]?.clientY??null;
+},{passive:true});
+document.addEventListener('touchend',e=>{
+ if(pipiReviewGripY===null)return;
+ const delta=(e.changedTouches?.[0]?.clientY??pipiReviewGripY)-pipiReviewGripY;
+ pipiReviewGripY=null;
+ if(delta>85&&ui.dialog?.includes('data-pipi-review-sheet="true"')){
+  ui.dialog=null;ui.v5ReviewQueue=null;renderDialog();
+ }
+},{passive:true});
+document.addEventListener('keydown',e=>{
+ if(e.key==='Escape'&&ui.dialog){ui.dialog=null;ui.v5ReviewQueue=null;renderDialog()}
+});
 // Import and recovery are handled only on backup.html with validated rollback.
 migrateNotebook();
 // One-time, non-destructive cleanup of old seven-times-"mastered" word entries.

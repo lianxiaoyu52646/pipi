@@ -12,7 +12,8 @@ const state={vocab:{
 },mistakes:{'word:remembered:0':{unit:'remembered',kind:'vocab',status:'mastered'}}};
 assert.deepEqual(core.dueIds(state,now),['remembered','legacy']);
 const text=fs.readFileSync(path.join(root,'app.js'),'utf8');
-assert(text.includes('熟悉里程碑，仍会按FSRS安排复习'));
-assert(!text.includes('state.vocab[unit].knownCount=0;'));
-assert(text.includes("it.status='mastered'")&&text.includes('reviewMemory(unit,true)'));
-console.log('PASS: learned seven times still enters spaced review; paused cards excluded; known count never reset on a lapse');
+assert(text.includes('pipiReviewAnswer(true)')&&text.includes('PipiReviewLogic.enrolled(entry)'), 'all word-review entry points use FSRS without removing notebook entries');
+assert(!text.includes('KNOWN_TO_ARCHIVE'),'no fixed known-count graduation threshold');
+assert(!text.includes('wordArchived(id)'),'FSRS due words must not be dropped due to historic mastered badges');
+assert(text.includes("it.status='pending'")&&text.includes('reviewMemory(unit,true)'));
+console.log('PASS: FSRS due scheduling survives historic mastery; no seven-times removal from notebook');
