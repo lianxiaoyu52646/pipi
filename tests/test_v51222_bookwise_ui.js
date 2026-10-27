@@ -1,0 +1,15 @@
+const fs=require('fs'),assert=require('assert'),path=require('path'),vm=require('vm');
+const root=path.join(__dirname,'..');
+const html=fs.readFileSync(path.join(root,'app/src/main/assets/voice-cache.html'),'utf8');
+const match=html.match(/<\/main><script>([\s\S]*?)<\/script><script>/);assert(match);new vm.Script(match[1]);
+for(const id of ['bookwiseCount','bookwisePercent','bookwiseFill','bookwiseHint'])assert(html.includes('id="'+id+'"'));
+const make=()=>({textContent:'',value:'',disabled:false,options:[],style:{width:''},classList:{toggle(){}}});
+const names=['savedProfile','voice','speed','status','percent','fill','progress','counter','state','book','bookwiseCount','bookwisePercent','bookwiseFill','bookwiseHint','realClips','realBytes','realSpeed','recoveryCount','detail','cacheLogs','start','pause','clear','recoveryHelp','recoveryHelpText','batterySettings'];
+const d=Object.fromEntries(names.map(n=>[n,make()]));
+d.voice.options=[{value:'3',textContent:'Sarah'}];d.speed.options=[{value:'1',textContent:'1.0'}];
+const bridge={getLibraryVoiceCacheStatus:()=>JSON.stringify({state:'running',phase:'generating',done:8005,total:82926,book:'傲慢与偏见',chapter:2,bookDone:305,bookTotal:6377,booksDone:1,booksTotal:20,lastWrittenAt:Date.now()-1000,lastProgressAt:Date.now()-1000})};
+vm.runInNewContext(match[1],{document:{getElementById:id=>d[id]},window:{SprintAndroid:bridge},Date,Number,Math,JSON,Boolean,Array,String,localStorage:{getItem:()=>null},setInterval(){},setTimeout(){},alert(){}});
+assert.match(d.counter.textContent,/8[,.]?005.*82[,.]?926/);assert.match(d.bookwiseCount.textContent,/1 \/ 20/);
+assert.match(d.bookwiseHint.textContent,/305.*6[,.]?377/);
+assert.equal(d.bookwiseFill.style.width,(305/6377*100).toFixed(2)+'%');
+console.log('PASS bookwise status: global original progress preserved, per-book counters and chapter display');

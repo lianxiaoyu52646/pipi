@@ -44,12 +44,14 @@ internal object VoiceCacheDiagnostics {
                 ApplicationExitInfo.REASON_CRASH->"进程异常崩溃"
                 ApplicationExitInfo.REASON_ANR->"应用无响应(ANR)"
                 ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE->"系统资源使用限制"
-                ApplicationExitInfo.REASON_USER_REQUESTED->"用户或系统停止"
+                ApplicationExitInfo.REASON_USER_REQUESTED->"用户或系统主动停止（可能由系统省电策略、后台清理或任务管理器触发）"
                 ApplicationExitInfo.REASON_EXIT_SELF->"进程自行退出"
                 else->"退出代码${matching.reason}"
             }
             JSONObject().put("at",matching.timestamp).put("reason",why)
+                .put("rawReason",matching.reason)
                 .put("importance",matching.importance).put("description",matching.description?:"")
+                .put("process",matching.processName?:"")
         }catch(_:Exception){null}
     }
 }

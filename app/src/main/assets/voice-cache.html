@@ -2,43 +2,92 @@
 <style>
 :root{font-family:system-ui,-apple-system,"Microsoft YaHei",sans-serif;color:#24213b;background:#f6f7fb}*{box-sizing:border-box}body{margin:0}main{max-width:620px;margin:auto;padding:calc(18px + env(safe-area-inset-top)) 18px 40px}a{color:#6157d5;text-decoration:none;font-weight:600}.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}h1{font-size:25px;letter-spacing:-.5px;margin:0 0 7px}.muted{color:#74758b;line-height:1.6;font-size:13px}.card{background:#fff;border:1px solid #e9e8f2;border-radius:22px;padding:20px;margin-top:16px;box-shadow:0 8px 24px #38387808}.eyebrow{color:#6559d4;font-size:11px;font-weight:750;letter-spacing:1px}.row{display:flex;gap:12px}.row>*{flex:1;min-width:0}label{display:block;font-size:12px;color:#68667f;margin:12px 0 6px;font-weight:700}select{appearance:none;width:100%;padding:13px 12px;border:1px solid #e4e2f0;border-radius:12px;background:#fafaff;font-size:14px;color:#2c2940}button{font:600 14px system-ui,-apple-system,sans-serif;border:none;border-radius:13px;padding:14px 12px;cursor:pointer;min-height:48px}button:disabled{opacity:.5}.primary{background:#665bea;color:white;flex:1.5}.subtle{background:#eeedfd;color:#534cbd}.danger{background:#fff0f0;color:#af4149}.progress.running{background:repeating-linear-gradient(110deg,#e9e8f6 0,#e9e8f6 16px,#dad7f8 17px,#e9e8f6 34px);background-size:180% 100%;animation:cache-pulse 2s linear infinite}@keyframes cache-pulse{to{background-position:180% 0}}.progress{height:12px;border-radius:20px;background:#e9e8f6;overflow:hidden;margin-top:18px}.fill{width:0;height:100%;background:linear-gradient(90deg,#9188f3,#6357dd);transition:width .3s}.progress-info{display:flex;justify-content:space-between;font-size:13px;margin-top:8px;color:#666382}.value{font-size:27px;font-weight:800;color:#6258d8}.book{font-size:15px;font-weight:700;margin-top:14px;line-height:1.5}.notice{border-radius:13px;padding:13px;background:#fffbef;color:#887039;font-size:12px;line-height:1.7}.hidden{display:none!important}.cache-real-stats{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:16px}.cache-real-stats>div{background:#f7f6fe;border:1px solid #eeecfa;border-radius:13px;padding:11px 12px}.cache-real-stats small{display:block;color:#827e9b;font-size:11px;margin-bottom:5px}.cache-real-stats b{color:#494071;font-size:17px;font-weight:800;font-variant-numeric:tabular-nums}
 </style><script src="./pipi-web-navigation.js"></script></head><body><main><div class="top"><a href="./index.html?nav=me" data-pipi-return="true">← 返回工具</a><span class="eyebrow">OFFLINE AUDIO</span></div><h1>全部原著语音缓存</h1><p class="muted">空闲时让皮皮逐本书、逐章生成离线声音。锁屏后由 Android 后台服务继续处理，完成的音频下次听书可以直接复用；升级后首次运行会导入旧缓存并校验一次，此后异常恢复直接按未完成片段续接。</p>
-<div class="card"><span class="eyebrow">缓存设置</span><div class="row"><div><label for="voice">缓存音色</label><select id="voice"><option value="3">Sarah 美式女声</option><option value="2">Nicole 美式女声</option><option value="7">Emma 英式女声</option></select></div><div><label for="speed">缓存语速</label><select id="speed"><option value="1">1.0× 标准</option><option value="0.75">0.75× 慢速</option><option value="1.25">1.25× 快速</option></select></div></div><p class="muted">请在阅读页选用相同的音色和语速，才能命中此缓存。切换声音或语速需要额外生成一份。</p><div class="row"><button class="primary" id="start">开始 / 继续缓存</button><button class="subtle" id="pause">暂停</button></div></div>
-<div class="card"><div class="eyebrow">整体进度</div><div style="display:flex;align-items:end;justify-content:space-between;margin-top:8px"><div id="status" style="font-weight:800;font-size:17px">待开始</div><div class="value" id="percent">0%</div></div><div class="progress" id="progress"><div class="fill" id="fill"></div></div><div class="progress-info"><span id="counter">0 / 0 句</span><span id="state">未运行</span></div><div class="book" id="book">等待选择“开始缓存”</div><div class="cache-real-stats"><div><small>本次真实新生成</small><b id="realClips">0 段</b></div><div><small>真实写入空间</small><b id="realBytes">0 MB</b></div><div><small>平均生成速度</small><b id="realSpeed">0 段/小时</b></div><div><small>自动恢复次数</small><b id="recoveryCount">0 次</b></div></div><p class="muted" id="detail" aria-live="polite">每完成一个片段就写入本地文件，断开后再次启动会跳过已完成的文件。</p><details style="margin-top:12px"><summary style="cursor:pointer;color:#6157d5;font-size:13px;font-weight:700">展开最近故障/恢复日志（最多8条）</summary><div id="cacheLogs" style="font-size:12px;color:#666382;white-space:pre-wrap;line-height:1.8;padding:9px 0">尚无故障记录</div></details></div>
+<div class="card"><span class="eyebrow">缓存设置</span><div class="row"><div><label for="voice">缓存音色</label><select id="voice"><option value="3">Sarah 美式女声</option><option value="2">Nicole 美式女声</option><option value="7">Emma 英式女声</option></select></div><div><label for="speed">缓存语速</label><select id="speed"><option value="1">1.0× 标准</option><option value="0.75">0.75× 慢速</option><option value="1.25">1.25× 快速</option></select></div></div><p class="muted">请在阅读页选用相同的音色和语速，才能命中此缓存。<strong>继续缓存会沿用上次的设置；切换声音或语速将另建一份缓存，必须先确认。</strong></p><p class="muted" id="savedProfile" style="color:#554abf;font-weight:650" aria-live="polite">正在读取上次缓存设置…</p><div class="row"><button class="primary" id="start">开始 / 继续缓存</button><button class="subtle" id="pause">暂停</button></div></div>
+<div class="card"><div class="eyebrow">整体进度</div><div style="display:flex;align-items:end;justify-content:space-between;margin-top:8px"><div id="status" style="font-weight:800;font-size:17px">待开始</div><div class="value" id="percent">0%</div></div><div class="progress" id="progress"><div class="fill" id="fill"></div></div><div class="progress-info"><span id="counter">0 / 0 句</span><span id="state">未运行</span></div><div class="book" id="book">等待选择“开始缓存”</div><div id="bookwiseProgress" style="margin:15px 0 12px;padding:12px 13px;border:1px solid #ebe9fa;border-radius:14px;background:#fbfaff" aria-live="polite"><div style="display:flex;justify-content:space-between;font-size:13px;color:#645cc2;font-weight:700"><span id="bookwiseCount">逐本缓存 · 准备中</span><span id="bookwisePercent">0%</span></div><div style="height:6px;border-radius:20px;background:#e8e6f9;margin:9px 0;overflow:hidden"><div id="bookwiseFill" style="height:100%;width:0%;background:#6f65dd;border-radius:20px;transition:width .2s"></div></div><div id="bookwiseHint" style="font-size:12px;color:#77718e">只为当前章节建立任务；完成一本后自动切换下一本</div></div><div class="cache-real-stats"><div><small>本次真实新生成</small><b id="realClips">0 段</b></div><div><small>真实写入空间</small><b id="realBytes">0 MB</b></div><div><small>平均生成速度</small><b id="realSpeed">0 段/小时</b></div><div><small>自动恢复次数</small><b id="recoveryCount">0 次</b></div></div><p class="muted" id="detail" aria-live="polite">每完成一个片段就写入本地文件，断开后再次启动会跳过已完成的文件。</p><div class="notice hidden" id="recoveryHelp" style="margin-top:12px" aria-live="polite"><div id="recoveryHelpText"></div><button class="subtle" id="batterySettings" style="margin-top:10px">打开皮皮系统设置 · 检查省电限制</button></div><details style="margin-top:12px"><summary style="cursor:pointer;color:#6157d5;font-size:13px;font-weight:700">展开最近故障/恢复日志（最多8条）</summary><div id="cacheLogs" style="font-size:12px;color:#666382;white-space:pre-wrap;line-height:1.8;padding:9px 0">尚无故障记录</div></details></div>
 <div class="card"><div class="notice">首次整书生成可能需要数小时甚至更久，并占用数GB空间。建议充电、保持手机散热良好，并在系统设置中允许皮皮后台运行。Android 仍可能因系统资源回收而延迟任务；皮皮通过独立缓存进程、恢复闹钟和断点检查尽力继续，不需要手动点暂停再开始。手机空间不足时会等待释放空间，空间恢复后继续，不会伪装成手动暂停。缓存期间，如需实时文章朗读，请先手动暂停缓存。</div><div style="margin-top:14px"><button class="danger" id="clear">删除全部已缓存语音</button></div></div>
 </main><script>
-(function(){'use strict';const bridge=window.SprintAndroid;
+(function(){'use strict';const bridge=window.SprintAndroid;let latest=null,profileRestored=false;
 const $=id=>document.getElementById(id);const labels={idle:'未运行',running:'后台缓存中',recovering:'自动恢复中',paused:'已手动暂停',finished:'全部已完成',error:'缓存异常'};
 try{$('voice').value=localStorage.getItem('pipi_article_voice_id_v56')||'3';$('speed').value=localStorage.getItem('pipi_offline_voice_rate_v55')||'1'}catch(_){}
 function update(){if(!bridge||!bridge.getLibraryVoiceCacheStatus){$('detail').textContent='此功能需要最新版 Android 安装包；普通浏览器无法在锁屏后生成语音。';$('start').disabled=true;return;}
-try{const s=JSON.parse(bridge.getLibraryVoiceCacheStatus());const done=Number(s.done)||0,total=Number(s.total)||0,percent=total?Math.min(100,done*100/total):0;
-const phaseNames={starting:'正在启动后台任务',resuming:'正在快速恢复缓存任务',indexing:'首次建立持久化语音索引',index_ready:'缓存索引已就绪',verifying:'已生成完毕，正在校验文件完整性',scanning:'正在统计书籍语音',waiting_model:'等待阅读器释放语音模型',loading_model:'正在加载Kokoro模型',generating:'正在生成语音片段',waiting_storage:'空间不足，等待恢复',waiting_configuration:'资源异常，保留任务待修复',waiting_failed_segments:'问题片段冷却后单独重试',retrying:'异常后正在自动重试',stopping:'正在响应手动暂停',finished:'全部完成',paused:'已手动暂停',error:'缓存出现错误'};
+try{const s=JSON.parse(bridge.getLibraryVoiceCacheStatus());latest=s;
+if(s.profileKnown){
+ const voice=String(s.savedSpeaker),speed=String(s.savedSpeed);
+ if(!profileRestored){
+  if(Array.from($('voice').options).some(x=>x.value===voice))$('voice').value=voice;
+  if(Array.from($('speed').options).some(x=>Number(x.value)===Number(speed)))$('speed').value=String(Number(speed));
+  profileRestored=true;
+ }
+ const voiceText=Array.from($('voice').options).find(x=>x.value===voice)?.textContent||('音色 '+voice);
+ $('savedProfile').textContent='上次缓存档案：'+voiceText+' / '+Number(speed).toFixed(2)+'×。点击继续会复用这份档案。';
+}else{$('savedProfile').textContent='尚无已保存的缓存档案，可以首次选择音色与语速。';}
+const done=Number(s.done)||0,total=Number(s.total)||0,percent=total?Math.min(100,done*100/total):0;
+const phaseNames={starting:'正在启动后台任务',resuming:'正在快速恢复缓存任务',indexing:'首次建立持久化语音索引',index_ready:'缓存索引已就绪',verifying:'已生成完毕，正在校验文件完整性',scanning:'正在统计书籍语音',waiting_model:'等待阅读器释放语音模型',thermal_cooldown:'手机过热保护，暂缓合成',loading_model:'正在加载Kokoro模型',generating:'正在生成语音片段',waiting_storage:'空间不足，等待恢复',waiting_configuration:'资源异常，保留任务待修复',waiting_failed_segments:'问题片段冷却后单独重试',retrying:'异常后正在自动重试',stopping:'正在响应手动暂停',finished:'全部完成',paused:'已手动暂停',error:'缓存出现错误'};
 const phase=phaseNames[s.phase]||'';const elapsed=s.phaseStartedAt?Math.max(0,Math.floor((Date.now()-s.phaseStartedAt)/1000)):0;
 const lastProgress=Number(s.lastProgressAt)||0;
 const quietSeconds=lastProgress?Math.max(0,Math.floor((Date.now()-lastProgress)/1000)):0;
 // CSS stripes are never evidence that a new PCM file was actually written.
 const quietThisRun=Math.max(0,Math.floor((Date.now()-Math.max(lastProgress,Number(s.phaseStartedAt)||0))/1000));
 const suspicious=s.state==='running'&&s.phase==='generating'&&total>0&&done<total&&quietThisRun>=300;
-$('status').textContent=suspicious?'未写入新音频，后台自动恢复中':(s.state==='running'?(phase||'后台缓存中'):(labels[s.state]||'未运行'));
+// Five minutes without a clip is a WARNING, not proof that a restart has begun.
+// The native 12-minute watchdog decides whether a process recycle is necessary.
+$('status').textContent=s.recoveryLaunchBlocked?'后台恢复被系统限制':
+ (suspicious?'超过5分钟没有新片段，正在诊断':(s.state==='running'?(phase||'后台缓存中'):(labels[s.state]||'未运行')));
+const systemExit=String(s.exitProcessReason||'').includes('用户或系统主动停止');
+const needHelp=Boolean(s.recoveryLaunchBlocked||s.backgroundRestricted||(s.batteryOptimized&&(systemExit||Number(s.autoRestarts)>0)));
+$('recoveryHelp').classList.toggle('hidden',!needHelp);
+if(needHelp){
+ $('recoveryHelpText').textContent=(s.recoveryLaunchBlocked?'Android本次拒绝了后台恢复请求。':'发现后台停止记录，可能与手机省电/后台清理有关。')+
+  '请到系统设置把皮皮的电池策略改为「无限制」，允许自启动及后台运行；已经生成的PCM文件不会因此删除。'+
+  (s.exitProcessDescription?(' 系统退出详情：'+String(s.exitProcessDescription).slice(0,120)):'');
+}
 $('percent').textContent=(total?percent.toFixed(percent<1?3:2):'0')+'%';
 $('fill').style.width=percent+'%';$('progress').classList.toggle('running',s.state==='running'&&!suspicious&&s.phase==='generating');
-$('counter').textContent=done+' / '+total+' 段已完成';
+$('counter').textContent=done+' / '+total+' 段累计已完成（非本次新增）';
 $('state').textContent=(s.state==='running'&&s.phase==='generating'&&s.chapterTotal)?('正在处理本章第 '+(s.chapterDone||0)+' / '+s.chapterTotal+' 段'):(s.phase==='indexing'&&s.indexingTotal?('首次导入校验 '+Number(s.indexingScanned||0).toLocaleString('zh-CN')+' / '+Number(s.indexingTotal).toLocaleString('zh-CN')):(phase||labels[s.state]||''));
 $('book').textContent=(s.book||'准备缓存20本原著')+(s.chapter?' · 第 '+s.chapter+' 章':'');
+const bookDone=Number(s.bookDone)||0,bookTotal=Number(s.bookTotal)||0,booksDone=Number(s.booksDone)||0,booksTotal=Number(s.booksTotal)||20;
+const bookPercent=bookTotal?100*bookDone/bookTotal:0;
+$('bookwiseCount').textContent='逐本缓存 · 已完成 '+booksDone+' / '+booksTotal+' 本';
+$('bookwisePercent').textContent=bookTotal?bookPercent.toFixed(1)+'%':'准备中';
+$('bookwiseFill').style.width=Math.min(100,bookPercent).toFixed(2)+'%';
+$('bookwiseHint').textContent=bookTotal?('当前《'+(s.book||'原著')+'》 '+bookDone.toLocaleString('zh-CN')+' / '+bookTotal.toLocaleString('zh-CN')+' 段 · 按章分批构建索引'):('旧任务索引迁移或正在准备当前章节');
 const generated=Number(s.newClips)||0,createdMB=(Number(s.newBytes)||0)/1048576,rate=Number(s.clipsPerHour)||0;
 $('realClips').textContent=generated.toLocaleString('zh-CN')+' 段';$('realBytes').textContent=createdMB.toFixed(1)+' MB';$('realSpeed').textContent=rate.toLocaleString('zh-CN')+' 段/小时';$('recoveryCount').textContent=(Number(s.autoRestarts)||0)+' 次';
 const realProgress=lastProgress?('距离上次真实完成片段 '+quietSeconds+' 秒。'):'';
 const written=Number(s.lastWrittenAt)||0;
 const realWrite=written?('最后写入新音频：'+new Date(written).toLocaleTimeString()+'。'):('当前还没有写入新音频。');
-$('detail').textContent=(suspicious?'超过5分钟尚无新片段：动画已停止。系统会自动重试；若是Kokoro原生卡死，将重启独立缓存进程后断点续接。':'')+
+$('detail').textContent=(suspicious?'超过5分钟无新片段，正在诊断耗时句段；并不表示已执行重启。若达到原生看门狗超时，才会重启缓存进程并断点续接。':'')+
  ((s.error?(s.error+' '):'')+(s.lastRestartReason&&Number(s.autoRestarts)>0?('最近自动恢复：'+s.lastRestartReason+'。'):'')+((s.state==='finished')?'语音缓存已完成。':
  (s.state==='running'?(phase||'后台缓存中')+'，此阶段持续 '+elapsed+' 秒（不是单段等待时间）。'+realProgress+realWrite+'本次新生成 '+generated+' 段 / '+createdMB.toFixed(1)+' MB，累计平均 '+rate+' 段/小时。'+(s.recentSynthesisClips?('最近'+s.recentSynthesisClips+'段纯合成均耗 '+Math.round(Number(s.recentSynthesisMs)/s.recentSynthesisClips)+' 毫秒，实时系数 '+(Number(s.recentSynthesisMs)/Math.max(1,Number(s.recentAudioMs))).toFixed(2)+'。'):'')+(s.modelLoadMs?('模型加载 '+s.modelLoadMs+' 毫秒。'):'')+(s.deferredSegments?('暂缓重试 '+s.deferredSegments+' 段。'):'')+(s.latestExitReason?('上次进程退出：'+s.latestExitReason+'。'):''):
  '后台生成使用通知栏显示进度，锁屏后可继续。')));
-const events=(Array.isArray(s.diagnosticEvents)?s.diagnosticEvents:[]).slice(-8).reverse();
+const rawEvents=(Array.isArray(s.diagnosticEvents)?s.diagnosticEvents:[]).slice(-24).reverse();
+// A service 'restart' and its 'process_exit' are the same recovery incident.
+// Show it once so four system stops do not appear as eight independent faults.
+const events=rawEvents.filter((e,i)=>!(e.kind==='restart' && rawEvents[i+1]?.kind==='process_exit' &&
+ Math.abs(Number(e.at)-Number(rawEvents[i+1].at))<3000)).slice(0,8);
 $('cacheLogs').textContent=events.length?events.map(x=>new Date(Number(x.at)||0).toLocaleString()+' · '+(x.kind||'事件')+' · '+(x.detail||'')+(x.key?' · 片段 '+x.key:'')).join('\n'):'暂无故障/恢复事件';
 const taskActive=s.wanted===undefined?(s.state==='running'):Boolean(s.wanted);$('start').disabled=taskActive;$('pause').disabled=!taskActive;
 }catch(e){$('detail').textContent='读取缓存状态失败：'+e.message}}
-$('start').onclick=()=>{if(!bridge||!bridge.startLibraryVoiceCache)return;const speaker=Number($('voice').value),speed=Number($('speed').value);bridge.startLibraryVoiceCache(speaker,speed);setTimeout(update,700)};
+$('start').onclick=()=>{
+ if(!bridge||!bridge.startLibraryVoiceCache)return;
+ const speaker=Number($('voice').value),speed=Number($('speed').value);
+ const previous=latest;
+ const changed=previous?.profileKnown && (Number(previous.savedSpeaker)!==speaker || Number(previous.savedSpeed)!==speed);
+ if(changed){
+  const oldVoice=Array.from($('voice').options).find(x=>Number(x.value)===Number(previous.savedSpeaker))?.textContent||('音色 '+previous.savedSpeaker);
+  const message='检测到你与上次缓存的音色或语速不同。\n\n上次：'+oldVoice+' / '+Number(previous.savedSpeed).toFixed(2)+'×\n现在：'+$('voice').selectedOptions[0].textContent+' / '+speed.toFixed(2)+'×\n\n切换后将建立另一套独立缓存，整体进度可能从0开始，但原有PCM音频不会被删除。\n\n【取消】沿用上次档案；【确定】确认切换。';
+  if(!confirm(message)){
+   $('voice').value=String(previous.savedSpeaker);$('speed').value=String(Number(previous.savedSpeed));
+   bridge.startLibraryVoiceCache(Number(previous.savedSpeaker),Number(previous.savedSpeed));
+  }else if(bridge.startLibraryVoiceCacheWithProfile){
+   bridge.startLibraryVoiceCacheWithProfile(speaker,speed,true);
+  }else{alert('当前APK没有切换缓存档案接口，请升级后再切换。');return;}
+ }else bridge.startLibraryVoiceCache(speaker,speed);
+ setTimeout(update,700);
+};
 $('pause').onclick=()=>{bridge?.pauseLibraryVoiceCache?.();setTimeout(update,600)};
+$('batterySettings').onclick=()=>bridge?.openLibraryCacheBatterySettings?.();
 $('clear').onclick=()=>{if(!bridge?.clearLibraryVoiceCache)return;if(confirm('确定清空所有离线书籍语音？学习记录和原著文字不受影响。请先暂停缓存任务。')){bridge.clearLibraryVoiceCache();setTimeout(update,700)}};
 update();setInterval(update,1400);
 })();

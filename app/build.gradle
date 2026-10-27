@@ -6,8 +6,8 @@ android {
         applicationId 'com.sprint7.offline'
         minSdk 26
         targetSdk 34
-        versionCode 47
-        versionName '5.12.18'
+        versionCode 53
+        versionName '5.12.24'
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         // Official AAR contains multiple ABIs. Limit deliverable to real ARM devices.
         ndk { abiFilters 'arm64-v8a', 'armeabi-v7a' }
@@ -86,6 +86,53 @@ tasks.register('verifyOfflineVoiceAssets') {
     }
 }
 tasks.matching { it.name == 'preBuild' }.configureEach { dependsOn 'verifyOfflineVoiceAssets' }
+
+// Verify the prepacked chapter slices against raw book files BEFORE APK assembly.
+// Android runtime then only needs to parse the current chapter.
+tasks.register('verifyVoiceChapterAssets') {
+    doLast {
+        def root = file('src/main/assets/voice-library')
+        def planFile = new File(root, 'chapter-manifest.json')
+        if (!planFile.isFile()) throw new GradleException('缺少逐章缓存校验清单，运行 tools/build_voice_chapter_assets.py')
+        def plan = new groovy.json.JsonSlurper().parse(planFile)
+        def src = new groovy.json.JsonSlurper().parse(new File(root, 'index.json'))
+        if (plan.version != 1 || plan.books.size() != src.size()) throw new GradleException('逐章缓存清单版本或书籍数量错误')
+        plan.books.eachWithIndex { book, i ->
+            if (book.id != src[i].id || book.chapters.size() != src[i].chapters)
+                throw new GradleException('逐章缓存清单不匹配：' + book.id)
+            def digest = java.security.MessageDigest.getInstance('SHA-256')
+            new File(root, book.id + '.json').withInputStream { input ->
+                byte[] buf = new byte[32768]; int n
+                while ((n = input.read(buf)) != -1) digest.update(buf,0,n)
+            }
+            if (digest.digest().encodeHex().toString() != book.sha256)
+                throw new GradleException('逐章清单已过期：' + book.id)
+            def sourceBook = new groovy.json.JsonSlurper().parse(new File(root, book.id + '.json'))
+            int pos = 0
+            book.chapters.eachWithIndex { ch, j ->
+                def filename = String.format('%03d.json',j+1)
+                def f = new File(root, 'chapters/' + book.id + '/' + filename)
+                if (!f.isFile()) throw new GradleException('缺少章节文件：' + f)
+                digest = java.security.MessageDigest.getInstance('SHA-256')
+                f.withInputStream { input ->
+                    byte[] buf = new byte[32768]; int n
+                    while ((n = input.read(buf)) != -1) digest.update(buf,0,n)
+                }
+                if (digest.digest().encodeHex().toString() != ch.sha256 || ch.start != pos)
+                    throw new GradleException('章节校验失败：' + book.id + '/' + filename)
+                def chapterData = new groovy.json.JsonSlurper().parse(f)
+                if (chapterData.sentences != sourceBook.sections[j].sentences ||
+                    chapterData.sentences.size() != ch.count)
+                    throw new GradleException('逐章内容与原书不一致：' + book.id + '/' + filename)
+                pos += ch.count
+            }
+            if (pos != src[i].sentences)
+                throw new GradleException('章节片段总数不匹配：' + book.id)
+        }
+    }
+}
+tasks.matching { it.name == 'preBuild' }.configureEach { dependsOn 'verifyVoiceChapterAssets' }
+
 
 
 // V5.7 RELEASE GATE: debug builds remain available to diagnose incomplete

@@ -11,7 +11,9 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.app.ActivityManager
 import android.os.Process
+import android.os.SystemClock
 import android.os.StatFs
 import android.database.sqlite.SQLiteDatabaseCorruptException
 import android.util.Log
@@ -43,28 +45,77 @@ class LibraryVoiceCacheService : Service() {
         private const val MIN_FREE_BYTES=256L*1024L*1024L
         private const val DESIRED="user_wants_continuous_cache"
         private val running=AtomicBoolean(false)
+        // UI polls about every 1.4s. Avoid a Binder process-exit history query
+        // on every poll; 30s precision is sufficient for diagnostic labels.
+        @Volatile private var exitCheckedElapsed=0L
+        @Volatile private var cachedExit:JSONObject?=null
+        private fun recentExit(context: Context):JSONObject? {
+            val now=SystemClock.elapsedRealtime()
+            if(exitCheckedElapsed!=0L && now-exitCheckedElapsed<30_000L)return cachedExit
+            synchronized(this){
+                if(exitCheckedElapsed==0L || now-exitCheckedElapsed>=30_000L){
+                    cachedExit=VoiceCacheDiagnostics.latestProcessExit(context,0L)
+                    exitCheckedElapsed=now
+                }
+            }
+            return cachedExit
+        }
         /** A status query is intentionally read-only: checking progress cannot pause a job. */
         @JvmStatic fun isActive(): Boolean = running.get()
         @JvmStatic fun shouldResume(context: Context): Boolean = VoiceCacheRecovery.desired(context)
         fun status(context: Context): String {
+            val remembered = VoiceCacheRecovery.rememberedParameters(context)
             val current = VoiceCacheRecovery.status(context)
-                ?: return "{\"state\":\"idle\",\"done\":0,\"total\":0}"
+                ?: JSONObject().put("state", "idle").put("done", 0).put("total", 0)
+            current.put("profileKnown", remembered != null)
+            if (remembered != null) {
+                current.put("savedSpeaker", remembered.first)
+                current.put("savedSpeed", remembered.second.toDouble())
+            }
             val wanted = VoiceCacheRecovery.desired(context)
             val state = current.optString("state")
             val age = System.currentTimeMillis() - current.optLong("updatedAt", 0L)
             if (wanted && (state == "running" || state == "retrying") && age > 90_000L) {
                 current.put("state", "recovering")
-                current.put("error", "后台服务心跳超过90秒未更新；恢复闹钟和前台服务正在尝试续接")
+                current.put("error", "后台服务超过90秒没有心跳；恢复闹钟将尝试续接，若系统禁止后台启动请打开皮皮")
             }
             val realWrite=current.optLong("lastWrittenAt",0L)
             val writeAge=if(realWrite>0L) (System.currentTimeMillis()-realWrite).coerceAtLeast(0L) else 0L
             val phase=current.optString("phase")
             val trulyStalled=wanted && (state=="running" || state=="retrying") &&
                 phase=="generating" && realWrite>0L && writeAge>5L*60L*1000L
+            val latestAttempt=VoiceCacheRecovery.recoveryAttempt(context)
+            val lastAttemptAt=latestAttempt?.optLong("at")?:0L
+            val attemptOutcome=latestAttempt?.optString("outcome")?:""
+            // A successful foreground-service heartbeat supersedes a former launch error.
+            val blocked=(attemptOutcome=="launch_blocked" || attemptOutcome=="foreground_failed") &&
+                lastAttemptAt>current.optLong("updatedAt",0L)
+            val pm=context.getSystemService(Context.POWER_SERVICE) as PowerManager
+            val batteryOptimized=if(Build.VERSION.SDK_INT>=23) !pm.isIgnoringBatteryOptimizations(context.packageName) else false
+            val appRestricted=if(Build.VERSION.SDK_INT>=28)
+                (context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).isBackgroundRestricted else false
+            val exit=recentExit(context)
             current.put("realWriteAgeMs",writeAge)
                 .put("stalled",trulyStalled)
                 .put("lastRecoveryReason",current.optString("lastRestartReason"))
-                .put("actualProduction",phase=="generating" && !trulyStalled && age<=90_000L)
+                .put("actualProduction",phase=="generating" && !trulyStalled && age<=90_000L && realWrite>0L && writeAge<=120_000L)
+                .put("recoveryLaunchBlocked",blocked)
+                .put("recoveryAttemptAt",lastAttemptAt)
+                .put("recoveryAttemptOutcome",attemptOutcome)
+                .put("recoveryAttemptDetail",latestAttempt?.optString("detail")?:"")
+                .put("batteryOptimized",batteryOptimized)
+                .put("backgroundRestricted",appRestricted)
+                .put("powerSaving",pm.isPowerSaveMode)
+                .put("exitProcessAt",exit?.optLong("at")?:0L)
+                .put("exitProcessReason",exit?.optString("reason")?:"")
+                .put("exitProcessDescription",exit?.optString("description")?:"")
+                // Read the live log here: it can be updated by the recovery receiver
+                // while the background synthesis process has been killed.
+                .put("diagnosticEvents",VoiceCacheDiagnostics.read(context).optJSONArray("events")?:JSONArray())
+            if(blocked && wanted) {
+                current.put("state","recovering")
+                current.put("error","后台自动恢复已被系统阻止；重新打开皮皮即可尝试续接，已完成的PCM和SQLite不会丢失")
+            }
             return current.toString()
         }
         fun cacheFolder(context: Context)=File(context.filesDir,"pipi-kokoro-library-v1")
@@ -83,6 +134,10 @@ class LibraryVoiceCacheService : Service() {
     @Volatile private var lastPhase="idle"
     private var lastChapterDone=0
     private var lastChapterTotal=0
+    @Volatile private var lastBookDone=0
+    @Volatile private var lastBookTotal=0
+    @Volatile private var booksDone=0
+    @Volatile private var booksTotal=20
     @Volatile private var indexingScanned=0
     @Volatile private var indexingTotal=0
     @Volatile private var phaseStartedAt=0L
@@ -103,6 +158,10 @@ class LibraryVoiceCacheService : Service() {
     private var lastRestartReason=""
     private var completedStartAt=0L
     private var processLease:KokoroProcessGate.Lease?=null
+    // Only an explicit user Start should reset the terminal-failure quarantine.
+    @Volatile private var userInitiatedStart=false
+    @Volatile private var modelWaitRounds=0
+    private class CacheNeedsAttentionException(message:String): IllegalStateException(message)
     @Volatile private var modelLoadMs=0L
     @Volatile private var lastSynthesisMs=0L
     @Volatile private var lastDiskWriteMs=0L
@@ -111,6 +170,7 @@ class LibraryVoiceCacheService : Service() {
     @Volatile private var generatedRollingClips=0
     @Volatile private var generatedRollingAudioMs=0L
     @Volatile private var deferredSegments=0
+    @Volatile private var thermalCooldownCount=0
     private var latestExitReason=""
     private var latestExitAt=0L
     @Volatile private var newlyGeneratedClips=0
@@ -131,7 +191,10 @@ class LibraryVoiceCacheService : Service() {
             .put("book",lastBook).put("chapter",lastChapter).put("speaker",lastSpeaker)
             .put("speed",lastSpeed).put("error",displayedError)
             .put("phase",lastPhase).put("chapterDone",lastChapterDone)
-            .put("chapterTotal",lastChapterTotal).put("indexingScanned",indexingScanned)
+            .put("chapterTotal",lastChapterTotal).put("bookDone",lastBookDone)
+            .put("bookTotal",lastBookTotal).put("booksDone",booksDone)
+            .put("booksTotal",booksTotal).put("queueMode","book_chapter_lazy_v2")
+            .put("indexingScanned",indexingScanned)
             .put("indexingTotal",indexingTotal).put("phaseStartedAt",phaseStartedAt)
             .put("lastProgressAt",lastProgressAt)
             .put("lastWrittenAt",lastWrittenAt)
@@ -151,6 +214,9 @@ class LibraryVoiceCacheService : Service() {
             .put("recentSynthesisMs",synthesisRollingMs)
             .put("recentAudioMs",generatedRollingAudioMs)
             .put("deferredSegments",deferredSegments)
+            .put("modelWaitRounds",modelWaitRounds)
+            .put("thermalCooldownCount",thermalCooldownCount)
+            .put("terminalFailureLimit",VoiceCacheIndex.MAX_AUTO_FAILURES)
             .put("latestExitReason",latestExitReason).put("latestExitAt",latestExitAt)
             .put("diagnosticEvents",VoiceCacheDiagnostics.read(this).optJSONArray("events")?:JSONArray())
             .put("clipsPerHour",if(completedStartAt>0L)
@@ -217,14 +283,28 @@ class LibraryVoiceCacheService : Service() {
             }
             ACTION_START -> {
                 Log.i(TAG,"User started or resumed cache")
-                val speaker=intent.getIntExtra("speaker",3).coerceIn(0,10)
-                val speed=intent.getFloatExtra("speed",1f).let{if(it.isFinite())it.coerceIn(.7f,1.3f) else 1f}
+                val requestedSpeaker=intent.getIntExtra("speaker",3).coerceIn(0,10)
+                val requestedSpeed=intent.getFloatExtra("speed",1f).let{if(it.isFinite())it.coerceIn(.7f,1.3f) else 1f}
+                // The old two-argument WebView bridge may supply its *reading* settings.
+                // Never silently switch to an empty, different SQLite/PCM cache profile.
+                val remembered=VoiceCacheRecovery.rememberedParameters(this)
+                val allowNewProfile=intent.getBooleanExtra("allowNewVoiceProfile",false)
+                val changed=remembered!=null &&
+                    (remembered.first!=requestedSpeaker || remembered.second.toRawBits()!=requestedSpeed.toRawBits())
+                val speaker=if(changed && !allowNewProfile)remembered!!.first else requestedSpeaker
+                val speed=if(changed && !allowNewProfile)remembered!!.second else requestedSpeed
+                if(changed && !allowNewProfile) {
+                    Log.w(TAG,"Ignoring unintended voice-profile change; resuming saved cache profile")
+                    VoiceCacheDiagnostics.record(this,"profile_guard","已阻止意外切换音色或语速；继续旧缓存任务")
+                } else if(changed) {
+                    VoiceCacheDiagnostics.record(this,"profile_switch","用户确认建立另一套音色/语速缓存；旧文件保留")
+                }
                 // Persist parameters so Android's sticky restart does not reset voice settings.
                 lastSpeaker=speaker;lastSpeed=speed
                 prefs().edit().putBoolean(DESIRED,true).putInt("speaker",speaker)
                     .putFloat("speed",speed).commit()
                 VoiceCacheRecovery.request(this,true,speaker,speed)
-                startWorker(speaker,speed,false)
+                startWorker(speaker,speed,false,true)
                 return START_STICKY
             }
             // START_STICKY passes a null Intent after Android re-creates a killed service.
@@ -240,26 +320,32 @@ class LibraryVoiceCacheService : Service() {
         }
     }
 
-    private fun startWorker(speaker:Int,speed:Float,autoRestore:Boolean) {
+    private fun startWorker(speaker:Int,speed:Float,autoRestore:Boolean,manualStart:Boolean=false) {
         if (!running.compareAndSet(false,true)) {
             Log.i(TAG,"Ignoring duplicate start; synthesis worker still active (no unsafe second Kokoro session)")
             return
         }
         pauseRequested=false
+        userInitiatedStart=manualStart
+        modelWaitRounds=0
         lastSpeaker=speaker;lastSpeed=speed
         // UI sees the last durable checkpoint immediately, even during recovery.
         // The SQLite index will replace these numbers with verified disk data.
         val previous=VoiceCacheRecovery.status(this)
-        val sameTask=autoRestore || (previous?.optBoolean("wanted",false)==true &&
+        val sameTask=autoRestore || (previous!=null &&
             previous.optInt("speaker",speaker)==speaker &&
-            previous.optDouble("speed",speed.toDouble()).toFloat()==speed)
-        lastBook=previous?.optString("book") ?: ""
-        lastChapter=previous?.optInt("chapter") ?: 0
-        lastChapterDone=previous?.optInt("chapterDone") ?: 0
-        lastChapterTotal=previous?.optInt("chapterTotal") ?: 0
+            previous.optDouble("speed",speed.toDouble()).toFloat().toRawBits()==speed.toRawBits())
+        lastBook=if(sameTask)previous?.optString("book") ?: "" else ""
+        lastChapter=if(sameTask)previous?.optInt("chapter") ?: 0 else 0
+        lastChapterDone=if(sameTask)previous?.optInt("chapterDone") ?: 0 else 0
+        lastChapterTotal=if(sameTask)previous?.optInt("chapterTotal") ?: 0 else 0
         indexingScanned=0;indexingTotal=0
-        lastDone=previous?.optInt("done") ?: 0
-        lastTotal=previous?.optInt("total") ?: 0
+        lastBookDone=if(sameTask)previous?.optInt("bookDone")?:0 else 0
+        lastBookTotal=if(sameTask)previous?.optInt("bookTotal")?:0 else 0
+        booksDone=if(sameTask)previous?.optInt("booksDone")?:0 else 0
+        booksTotal=20
+        lastDone=if(sameTask)previous?.optInt("done") ?: 0 else 0
+        lastTotal=if(sameTask)previous?.optInt("total") ?: 0 else 0
         lastPhase="resuming";phaseStartedAt=System.currentTimeMillis()
         lastProgressAt=previous?.optLong("lastProgressAt") ?: 0L
         lastWrittenAt=previous?.optLong("lastWrittenAt") ?: 0L
@@ -328,6 +414,15 @@ class LibraryVoiceCacheService : Service() {
             if(lastPhase=="generating" && lastTotal>lastDone && lastWrittenAt>0L &&
                 now-lastWrittenAt>5L*60L*1000L && now-lastNativeWorkAt>5L*60L*1000L) {
                 lastError="缓存服务仍运行，但5分钟无新音频且合成没有活动；看门狗正在检查自动恢复"
+            }
+            // A lock owner may be legitimately reading an audiobook. Do not kill
+            // another process or misreport completed audio while waiting.
+            if(lastPhase=="waiting_model" && now-phaseStartedAt>3L*60_000L &&
+                now-stallWarningAt>=2L*60_000L){
+                stallWarningAt=now
+                val waited=(now-phaseStartedAt)/60_000L
+                lastError="Kokoro被另一进程占用约${waited}分钟；已按限时轮询，等待释放后继续，未丢失缓存"
+                VoiceCacheDiagnostics.record(this,"model_gate_wait",lastError)
             }
             // Real service heartbeats (unrelated to new audio) enable another
             // process to distinguish a healthy worker from a vanished service.
@@ -454,6 +549,15 @@ class LibraryVoiceCacheService : Service() {
                     // installed resource. This requires an app/resource update;
                     // a status message is more honest than fake progress/finished.
                     val reason=e.message?.takeIf{it.isNotBlank()}?:e.javaClass.simpleName
+                    if (e is CacheNeedsAttentionException) {
+                        // No healthy segment remains: keep every verified PCM but
+                        // stop the CPU-intensive loop until the user explicitly retries.
+                        rememberDesired(false)
+                        lastPhase="needs_attention"
+                        VoiceCacheDiagnostics.record(this,"needs_attention",reason)
+                        publish("error",reason)
+                        return
+                    }
                     if (e is LinkageError || e is IllegalArgumentException ||
                         reason.contains("缺少 Kokoro") || reason.contains("voice-library")) {
                         failures++
@@ -536,6 +640,21 @@ class LibraryVoiceCacheService : Service() {
                 }
             }
             if(!stillWanted())return false
+            // Lazy book/chapter indexing detects already-existing PCM via the same
+            // content-addressed keys. Never enumerate ALL existing PCM files here:
+            // that would defeat incremental startup and can take hours on a phone.
+            // Old full V1 SQLite rows were adopted transactionally by prepare().
+            booksDone=index.finishedBooks()
+            booksTotal=index.totalBooks()
+            // A manually requested restart is allowed to retry terminal clips.
+            // Automatic Android restores must not repeatedly retry them forever.
+            if(userInitiatedStart) {
+                val reset=index.resetTerminalFailures()
+                if(reset>0) VoiceCacheDiagnostics.record(this,"manual_retry","用户重新开始，重试${reset}个长期失败的唯一片段")
+                // Explicit retry clears book-level quarantine as well.
+                index.resetBookSnoozes()
+                userInitiatedStart=false
+            }
             val snapshot=index.counts()
             lastDone=snapshot.done;lastTotal=snapshot.total
             indexingScanned=0;indexingTotal=0
@@ -544,29 +663,33 @@ class LibraryVoiceCacheService : Service() {
             publish("running")
             var generatedSinceNotice=0
             var alreadyCheckedCompletion=false
+            var activeBookId=""
             while(stillWanted()) {
-                val job=index.next()
-                if(job==null) {
-                    // Pending clips under cooldown are NEVER considered finished.
-                    // Let healthy sentences go first, then retry isolated failures.
-                    deferredSegments=index.deferredCount()
-                    val remaining=index.counts()
-                    if(remaining.done<remaining.total){
-                        val delay=index.pendingCooldownMs()
-                        if(delay>0L){
+                var book=index.activeBook()
+                if(book==null) {
+                    // No *eligible* book is not the same as all books complete.
+                    // Let cooldown books sleep while other books finish; terminal
+                    // failures stay unfinished and require explicit user retry.
+                    val unresolved=index.unresolvedBooks()
+                    if(unresolved>0) {
+                        try { model?.free() } catch (_:Throwable) {}
+                        model=null
+                        try { processLease?.close() } catch (_:Throwable) {}
+                        processLease=null
+                        val wakeIn=index.nextBookWakeMs()
+                        if(wakeIn>0L) {
                             stage("waiting_failed_segments")
-                            publish("running","${deferredSegments}段等待单独重试，最早${(delay+999)/1000}秒后；已完成音频保留")
-                            sleepUntilRetry(minOf(delay,30_000L))
+                            publish("running","其余${unresolved}本有待重试片段；稍后续接，不会误报全部完成")
+                            sleepUntilRetry(minOf(wakeIn,30_000L))
+                            activeBookId=""
                             continue
                         }
-                        // Defensive: an unexpected SQL exclusion must not trigger an expensive final audit.
-                        throw IllegalStateException("存在未完成片段却无法取得待处理任务：${remaining.done}/${remaining.total}")
+                        throw CacheNeedsAttentionException(
+                            "另有${unresolved}本包含长期失败片段；其余书籍已尝试缓存，请手动检查后重新开始")
                     }
-                    if(alreadyCheckedCompletion) {
-                        check(lastDone==lastTotal){"数据库状态与已生成片段不一致：$lastDone/$lastTotal"}
-                        deferredSegments=0
-                        return true
-                    }
+                    // A final audit runs ONCE after all books reach 100%. If a
+                    // file vanished, reopen only its book, not the whole queue.
+                    if(alreadyCheckedCompletion)return true
                     stage("verifying")
                     publish("running")
                     val reopened=index.auditComplete(disk,{stillWanted()}){_,_->
@@ -574,14 +697,86 @@ class LibraryVoiceCacheService : Service() {
                     }
                     val actual=index.counts()
                     lastDone=actual.done;lastTotal=actual.total
+                    booksDone=index.finishedBooks()
                     if(reopened>0) {
-                        Log.w(TAG,"Final integrity audit re-queued $reopened missing occurrences")
-                        publish("running","终检发现${reopened}段缺失/损坏，正在自动补齐")
-                        alreadyCheckedCompletion=false
+                        publish("running","终检发现${reopened}段缺失，正在从对应书籍补齐；其余书籍无需重建")
+                        activeBookId=""
                         continue
                     }
                     alreadyCheckedCompletion=true
                     return true
+                }
+                alreadyCheckedCompletion=false
+                // Check one book's asset signature only upon switching books,
+                // then import only its next chapter when the queued chapter ends.
+                if(book.id!=activeBookId || index.pendingInBook(book)==0) {
+                    stage("indexing_book")
+                    index.indexNextChapter(this,disk,book,{stillWanted()}){done,total->
+                        indexingScanned=done;indexingTotal=total
+                    }
+                    if(!stillWanted())return false
+                    book=index.activeBook() ?: continue
+                    activeBookId=book.id
+                    val count=index.counts()
+                    lastDone=count.done;lastTotal=count.total
+                    indexingScanned=0;indexingTotal=0
+                }
+                lastBook=book.title
+                lastBookTotal=book.endSeq-book.startSeq+1
+                lastBookDone=index.bookCounts(book).done
+                booksDone=index.finishedBooks()
+                val job=index.next(book=book)
+                if(job==null) {
+                    try{model?.free()}catch(_:Throwable){}
+                    model=null
+                    try{processLease?.close()}catch(_:Throwable){}
+                    processLease=null
+                    deferredSegments=index.deferredCount(book=book)
+                    val pending=index.pendingInBook(book)
+                    if(pending==0){
+                        if(index.finishBookIfComplete(book)) {
+                            booksDone=index.finishedBooks()
+                            lastBookDone=lastBookTotal
+                            VoiceCacheDiagnostics.record(this,"book_complete","${book.title} 缓存完成，自动进入下一本")
+                            publish("running","《${book.title}》已完成，正在自动切换下一本")
+                            activeBookId=""
+                            continue
+                        }
+                        // All currently indexed chapters are done, but more
+                        // chapters remain. The NEXT iteration imports only one.
+                        activeBookId=""
+                        continue
+                    }
+                    // A failed paragraph must not block the rest of its book:
+                    // import the next chapter if the current indexed rows are
+                    // all deferred or quarantined. Only ONE chapter per pass.
+                    if(book.indexedChapters<book.chapters) {
+                        stage("indexing_book")
+                        index.indexNextChapter(this,disk,book,{stillWanted()}){done,total->
+                            indexingScanned=done;indexingTotal=total
+                        }
+                        indexingScanned=0;indexingTotal=0
+                        activeBookId=""
+                        continue
+                    }
+                    val delay=index.pendingCooldownMs(book=book)
+                    if(delay>0L){
+                        index.snoozeBook(book,System.currentTimeMillis()+delay,"cooldown")
+                        stage("waiting_failed_segments")
+                        publish("running","《${book.title}》有${deferredSegments}段冷却中，先继续下一本；不会将其计入已完成")
+                        activeBookId=""
+                        continue
+                    }
+                    val blocked=index.terminalCount(book)
+                    if(blocked>0) {
+                        index.snoozeBook(book,Long.MAX_VALUE,"needs_attention")
+                        VoiceCacheDiagnostics.record(this,"book_deferred",
+                            "《${book.title}》有${blocked}段永久失败待处理，继续缓存其他书；这些片段仍为未完成")
+                        publish("running","《${book.title}》有${blocked}段待人工复查，已继续下一本；总进度不会虚报")
+                        activeBookId=""
+                        continue
+                    }
+                    throw IllegalStateException("本书存在未完成片段但无法领取任务：${book.title}")
                 }
                 alreadyCheckedCompletion=false
                 activeSegmentKey=job.key
@@ -596,6 +791,7 @@ class LibraryVoiceCacheService : Service() {
                 if(disk.has(job.key)) {
                     val added=index.complete(job.key)
                     lastDone+=added
+                    lastBookDone=index.bookCounts(book).done
                     lastProgressAt=System.currentTimeMillis()
                     lastChapterDone=job.chapterIndex
                     activeSegmentKey=""
@@ -603,13 +799,51 @@ class LibraryVoiceCacheService : Service() {
                     continue
                 }
                 if(!waitForSpace())return false
+                // Android thermal management can kill sustained JNI inference under
+                // severe thermal stress. Yield only when the OS actually reports
+                // SEVERE/CRITICAL temperature, not based on a speculative timer.
+                // Release model and file gate before cooling, and never mark a
+                // sentence complete until the PCM is durably written.
+                if(Build.VERSION.SDK_INT>=29) {
+                    val power=getSystemService(POWER_SERVICE) as PowerManager
+                    if(power.currentThermalStatus>=PowerManager.THERMAL_STATUS_SEVERE) {
+                        try { model?.free() } catch (_:Throwable) {}
+                        model=null
+                        try { processLease?.close() } catch (_:Throwable) {}
+                        processLease=null
+                        activeSegmentKey=""
+                        thermalCooldownCount++
+                        stage("thermal_cooldown")
+                        if(thermalCooldownCount==1 || thermalCooldownCount%5==0)
+                            VoiceCacheDiagnostics.record(this,"thermal_cooldown",
+                                "系统报告严重热状态，暂缓生成90秒并释放Kokoro；已完成PCM完整保留")
+                        publish("running","手机过热保护：已释放模型，90秒后重新检测温度；不是缓存丢失或程序卡死")
+                        sleepUntilRetry(90_000L)
+                        continue
+                    }
+                }
                 if(model==null) {
                     stage("waiting_model")
                     if(!stillWanted())return false
-                    processLease=KokoroProcessGate.acquire(this,{stillWanted()},0L) {
-                        stage("waiting_model")
-                        publish("running","另一个进程正在使用Kokoro，正在安全等待释放，不会并发加载两份模型")
-                    } ?: return false
+                    // Each acquisition has a hard deadline. Unlike the old 0L
+                    // (unlimited) wait, this loop remains observable and cancellable.
+                    // Never steal a live reader's lock or load a second ONNX model.
+                    while(stillWanted() && processLease==null) {
+                        processLease=KokoroProcessGate.acquire(this,{stillWanted()},120_000L) {
+                            stage("waiting_model")
+                            publish("running","另一个进程正在使用Kokoro；正在限时等待释放，不会并发加载两份模型")
+                        }
+                        if(processLease==null && stillWanted()) {
+                            modelWaitRounds++
+                            VoiceCacheDiagnostics.record(this,"model_gate_timeout",
+                                "第${modelWaitRounds}轮等待120秒；旧缓存完整保留")
+                            lastError="另一进程占用Kokoro；本轮等待超时，30秒后自动检查。已等待${modelWaitRounds}轮"
+                            publish("running",lastError)
+                            sleepUntilRetry(30_000L)
+                        }
+                    }
+                    if(processLease==null)return false
+                    modelWaitRounds=0
                     stage("loading_model")
                     val modelStarted=System.currentTimeMillis()
                     try {model=loadModel()}catch(t:Throwable){
@@ -689,6 +923,7 @@ class LibraryVoiceCacheService : Service() {
                     lastIndexCommitMs=(System.nanoTime()-diskDone)/1_000_000L
                     lastDiskWriteMs=(diskDone-diskStarted)/1_000_000L
                     lastDone+=added
+                    lastBookDone=index.bookCounts(book).done
                     lastProgressAt=System.currentTimeMillis()
                     lastWrittenAt=lastProgressAt
                     // A bounded recent window measures real synthesis throughput, not 27h elapsed time.

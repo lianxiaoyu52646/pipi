@@ -72,6 +72,7 @@ function makeRuntime(dictionary){
  assert.match(app,/hydrateSheet/);
  assert.match(html,/ecdict-offline\.js[\s\S]*pipi-review-phonetics\.js[\s\S]*app\.js/);
  assert.match(css,/\.pipi-review-hero-phonetic/);
- assert.equal(fs.readFileSync(path.join(assets,'app-version.js'),'utf8').includes('5.12.18'),true);
+ const version=fs.readFileSync(path.join(assets,'../../../build.gradle'),'utf8').match(/versionName '([^']+)'/)[1];
+ assert.equal(fs.readFileSync(path.join(assets,'app-version.js'),'utf8').includes(version),true);
  console.log('PASS V5.12.18 phonetic: ECDICT offline lookup, normalized IPA, caching, lazy list, stale card guard, graceful missing, UI binding');
 })().catch(e=>{console.error(e);process.exit(1);});

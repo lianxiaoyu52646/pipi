@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.provider.Settings;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
@@ -147,6 +148,13 @@ public class MainActivity extends Activity {
             return LibraryVoiceCacheService.Companion.status(getApplicationContext());
         }
         @JavascriptInterface public void startLibraryVoiceCache(int speakerId, float speed) {
+            startVoiceCache(speakerId, speed, false);
+        }
+        /** Explicit choice required before starting an entirely separate voice-specific cache. */
+        @JavascriptInterface public void startLibraryVoiceCacheWithProfile(int speakerId, float speed, boolean allowNewVoiceProfile) {
+            startVoiceCache(speakerId, speed, allowNewVoiceProfile);
+        }
+        private void startVoiceCache(int speakerId, float speed, boolean allowNewVoiceProfile) {
             runOnUiThread(() -> {
                 if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                     requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 94);
@@ -156,9 +164,23 @@ public class MainActivity extends Activity {
                 if (articleVoice != null) articleVoice.releaseModel();
                 Intent job = new Intent(MainActivity.this, LibraryVoiceCacheService.class)
                     .setAction(LibraryVoiceCacheService.ACTION_START)
-                    .putExtra("speaker", speakerId).putExtra("speed", speed);
+                    .putExtra("speaker", speakerId).putExtra("speed", speed)
+                    .putExtra("allowNewVoiceProfile", allowNewVoiceProfile);
                 try { startForegroundService(job); }
                 catch (Exception e) {Toast.makeText(MainActivity.this, "缓存服务启动失败：" + e.getMessage(), Toast.LENGTH_LONG).show();}
+            });
+        }
+        /** Opens the official app-detail settings; user may disable OEM battery restrictions.
+         * Never silently change the user's battery policy. */
+        @JavascriptInterface public void openLibraryCacheBatterySettings() {
+            runOnUiThread(() -> {
+                try {
+                    Intent settings = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:" + getPackageName()));
+                    startActivity(settings);
+                } catch (Exception ex) {
+                    Toast.makeText(MainActivity.this, "无法打开系统设置："+ex.getMessage(), Toast.LENGTH_LONG).show();
+                }
             });
         }
         @JavascriptInterface public void pauseLibraryVoiceCache() {
@@ -264,12 +286,28 @@ public class MainActivity extends Activity {
         try { cacheStatus=new org.json.JSONObject(LibraryVoiceCacheService.Companion.status(getApplicationContext())); }
         catch (org.json.JSONException ex) { cacheStatus=null; }
         long lastBeat=cacheStatus!=null?cacheStatus.optLong("updatedAt",0L):0L;
+        // The exit journal can show a real service death before the 70s heartbeat
+        // expires; resume immediately while the app is visible (Android permits it).
+        org.json.JSONObject exit=VoiceCacheDiagnostics.INSTANCE.latestProcessExit(
+            getApplicationContext(), lastBeat+1L);
+        boolean recentExit=exit!=null && exit.optLong("at",0L)>lastBeat;
+        if (LibraryVoiceCacheService.shouldResume(getApplicationContext())) {
+            // Force Stop cancels app alarms. Re-arm on the first foreground visit.
+            try { VoiceCacheRecovery.INSTANCE.schedule(getApplicationContext(), 8L*60L*1000L); }
+            catch(Exception e) { android.util.Log.w("PipiCacheRecovery","Cannot re-arm recovery tick",e); }
+        }
         if (LibraryVoiceCacheService.shouldResume(getApplicationContext()) &&
-            (lastBeat<=0L || System.currentTimeMillis()-lastBeat>70_000L)) {
+            (lastBeat<=0L || System.currentTimeMillis()-lastBeat>70_000L || recentExit)) {
             try {
+                VoiceCacheRecovery.INSTANCE.noteForegroundRecovery(getApplicationContext(),
+                    "进入皮皮后请求从原缓存档案续接");
                 startForegroundService(new Intent(this, LibraryVoiceCacheService.class)
                     .setAction(LibraryVoiceCacheService.ACTION_RESTORE));
-            } catch (Exception ignored) { /* The user can still resume via the cache page. */ }
+            } catch (Exception e) {
+                VoiceCacheRecovery.INSTANCE.noteForegroundRecoveryFailed(getApplicationContext(),
+                    "前台恢复服务启动失败："+e.getClass().getSimpleName()+" "+e.getMessage());
+                android.util.Log.w("PipiCacheRecovery","Foreground recovery start failed",e);
+            }
         }
     }
     @Override protected void onPause() {

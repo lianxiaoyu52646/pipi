@@ -33,6 +33,8 @@ jobs:
         run: |
           python check_v5_release.py
           python verify_assets.py
+          python tools/build_voice_chapter_assets.py --verify
+          python tests/test_v51223_production_cache.py
       - name: Run all current JavaScript regression tests
         run: |
           for test in tests/*.js; do node "$test" || exit 1; done

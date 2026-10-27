@@ -1,1 +1,1 @@
-window.PipiBuildVersion = '5.12.18';
+window.PipiBuildVersion = '5.12.24';
